@@ -61,6 +61,7 @@ Thumbs.db
 
 *.pkl
 log/*
+logs/*
 log_old/*
 outputs/*
 multirun/*
@@ -70,3 +71,6 @@ log_old/*
 log_highenvmaplam/*
 videos/*
 *.th
+condor/
+*.code-workspace
+data
