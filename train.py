@@ -215,7 +215,8 @@ def reconstruction(args):
         is_testing=True,
     )
     white_bg = train_dataset.white_bg
-    train_dataset.near_far = args.dataset.near_far
+    if hasattr(args.dataset, 'near_far'):
+        train_dataset.near_far = args.dataset.near_far
     near_far = train_dataset.near_far
     ndc_ray = args.dataset.ndc_ray
 
