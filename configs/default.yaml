@@ -5,7 +5,7 @@ defaults:
   - dataset: materials
   - model: brdf_tcnn
   - field: tensorf_og
-basedir: ./log
+basedir: ./logs
 filter_rays: false
 expname: test
 datadir: /data

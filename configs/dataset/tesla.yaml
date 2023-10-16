@@ -1,0 +1,6 @@
+scenedir: tesla
+dataset_name: llff
+downsample_train: 4
+downsample_test: 4
+ndc_ray: false
+stack_norms: false
