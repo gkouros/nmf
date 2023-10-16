@@ -1,4 +1,4 @@
-scenedir: nerf_synthetic/ball
+scenedir: ref_shiny/ball
 dataset_name: blender
 downsample_train: 1
 downsample_test: 1

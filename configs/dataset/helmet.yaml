@@ -1,4 +1,4 @@
-scenedir: nerf_synthetic/helmet
+scenedir: ref_shiny/helmet
 dataset_name: blender
 downsample_train: 1
 downsample_test: 1

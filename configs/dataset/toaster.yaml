@@ -1,4 +1,4 @@
-scenedir: nerf_synthetic/toaster
+scenedir: ref_shiny/toaster
 dataset_name: blender
 downsample_train: 1
 downsample_test: 1

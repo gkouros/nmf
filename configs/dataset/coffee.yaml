@@ -1,4 +1,4 @@
-scenedir: nerf_synthetic/coffee
+scenedir: ref_shiny/coffee
 dataset_name: blender
 downsample_train: 1
 downsample_test: 1

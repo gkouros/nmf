@@ -1,4 +1,4 @@
-scenedir: nerf_synthetic/teapot
+scenedir: ref_shiny/teapot
 dataset_name: blender
 downsample_train: 1
 downsample_test: 1
