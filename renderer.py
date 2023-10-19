@@ -212,6 +212,7 @@ def evaluate(
     norm_errs = []
     ssims, l_alex, l_vgg = [], [], []
     os.makedirs(savePath, exist_ok=True)
+    os.makedirs(savePath + "/color", exist_ok=True)
     os.makedirs(savePath + "/rgbd", exist_ok=True)
     os.makedirs(savePath + "/normal", exist_ok=True)
     os.makedirs(savePath + "/world_normal", exist_ok=True)
@@ -221,6 +222,7 @@ def evaluate(
     # os.makedirs(savePath+"/debug", exist_ok=True)
     os.makedirs(savePath + "/tint", exist_ok=True)
     os.makedirs(savePath + "/spec", exist_ok=True)
+    os.makedirs(savePath + "/spec_viz", exist_ok=True)
     # os.makedirs(savePath+"/brdf", exist_ok=True)
     os.makedirs(savePath + "/diffuse", exist_ok=True)
     os.makedirs(savePath + "/roughness", exist_ok=True)
@@ -342,7 +344,6 @@ def evaluate(
             model = linear_model.LinearRegression()
             model.fit(X, Y)
             pred_Y = model.predict(X)
-
             mean_tint_err = ((pred_Y - Y) ** 2).mean()
             tint_psnrs.append(-10.0 * np.log(mean_tint_err.item()) / np.log(10.0))
         except:
@@ -423,15 +424,14 @@ def evaluate(
 
         if savePath is not None:
             if tensorf.hdr:
-                imageio.imwrite(
-                    f"{savePath}/{prtx}{idx:03d}.exr",
-                    tensorf.tonemap.inverse(ims.rgb_map),
-                )
+                imageio.imwrite(f"{savePath}/{prtx}{idx:03d}.exr", tensorf.tonemap.inverse(ims.rgb_map))
+                imageio.imwrite(f"{savePath}/{prtx}{idx:03d}.png", rgb_map)
             else:
                 imageio.imwrite(f"{savePath}/{prtx}{idx:03d}.png", rgb_map)
 
             rgb_map = np.concatenate((rgb_map, vis_depth_map), axis=1)
             imageio.imwrite(f"{savePath}/rgbd/{prtx}{idx:03d}.exr", ims.depth.numpy())
+            imageio.imwrite(f"{savePath}/rgbd_viz/{prtx}{idx:03d}.png", (255 * ims.depth / ims.depth.max()).numpy()).astype(np.uint8)
             imageio.imwrite(f"{savePath}/normal/{prtx}{idx:03d}.png", vis_normal)
             imageio.imwrite(
                 f"{savePath}/acc_map/{prtx}{idx:03d}.png",
@@ -448,6 +448,10 @@ def evaluate(
                 imageio.imwrite(
                     f"{savePath}/spec/{prtx}{idx:03d}.exr", ims.spec.numpy()
                 )
+                imageio.imwrite(
+                    f"{savePath}/spec_viz/{prtx}{idx:03d}.png", (255 * ims.spec / ims.spec.max()).numpy()
+                )
+
             if "roughness" in ims:
                 imageio.imwrite(
                     f"{savePath}/roughness/{prtx}{idx:03d}.png",
