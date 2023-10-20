@@ -61,11 +61,11 @@ class BlenderDataset(Dataset):
         ) as f:
             self.meta = json.load(f)
 
-        import pdb; pdb.set_trace()
         if "ext" in self.meta:
             ext = self.meta["ext"]
-        elif self.meta['frames'][0]['file_Path'].endswith('jpg') or \
-                self.meta['frames'][0]['file_Path'].endswith('png'):
+        elif self.meta['frames'][0]['file_path'].lower().endswith('jpg') or \
+                self.meta['frames'][0]['file_path'].lower().endswith('jpeg') or \
+                self.meta['frames'][0]['file_path'].lower().endswith('png'):
             ext = ""
         else:
             ext = ".png"
@@ -87,9 +87,7 @@ class BlenderDataset(Dataset):
         if "h" not in self.meta:
             self.meta["h"] = 800
 
-        w, h = int(self.meta["w"] / self.downsample), int(
-            self.meta["h"] / self.downsample
-        )
+        w, h = int(self.meta["w"] / self.downsample), int(self.meta["h"] / self.downsample)
         self.img_wh = [w, h]
         print(f"Original Image size: {self.meta['w']} x {self.meta['h']}")
         print(f"Image size: {w} x {h}")
