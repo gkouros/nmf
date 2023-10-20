@@ -1,5 +1,5 @@
 scenedir: renault_segmented
-dataset_name: llff
+dataset_name: blender
 downsample_train: 4
 downsample_test: 4
 ndc_ray: false
