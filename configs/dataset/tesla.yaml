@@ -1,6 +1,6 @@
 scenedir: tesla
 dataset_name: blender
-downsample_train: 4
-downsample_test: 4
+downsample_train: 2
+downsample_test: 2
 ndc_ray: false
 stack_norms: false
