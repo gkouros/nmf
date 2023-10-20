@@ -61,8 +61,12 @@ class BlenderDataset(Dataset):
         ) as f:
             self.meta = json.load(f)
 
+        import pdb; pdb.set_trace()
         if "ext" in self.meta:
             ext = self.meta["ext"]
+        elif self.meta['frames'][0]['file_Path'].endswith('jpg') or \
+                self.meta['frames'][0]['file_Path'].endswith('png'):
+            ext = ""
         else:
             ext = ".png"
         if "normal_ext" in self.meta:
@@ -148,9 +152,7 @@ class BlenderDataset(Dataset):
             self.poses += [c2w]
 
             image_path = os.path.join(self.root_dir, f"{frame['file_path']}{ext}")
-            normal_path = os.path.join(
-                self.root_dir, f"{frame['file_path']}_normal{normal_ext}"
-            )
+            normal_path = os.path.join(self.root_dir, f"{frame['file_path']}_normal{normal_ext}")
             tint_path = os.path.join(self.root_dir, "test", "tint", f"r_{i}{ext}")
             self.image_paths += [image_path]
             self.normal_paths += [normal_path]
