@@ -155,11 +155,11 @@ class BlenderDataset(Dataset):
             self.image_paths += [image_path]
             self.normal_paths += [normal_path]
             self.tint_paths += [tint_path]
-            # img = Image.open(image_path)
-            img = imageio.imread(image_path)
+            img = Image.open(image_path)
+            # img = imageio.imread(image_path)
 
             if self.downsample != 1.0:
-                img = img.resize(self.img_wh, Image.LANCZOS)
+                img.resize(self.img_wh, Image.LANCZOS)
             img = self.transform(img)  # (4, h, w)
             # plt.imshow(img.permute(1, 2, 0))
             # plt.show()
