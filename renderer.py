@@ -445,7 +445,7 @@ def evaluate(
             if "spec" in ims:
                 imageio.imwrite(f"{savePath}/spec/{prtx}{idx:03d}.exr", ims.spec.numpy())
                 spec_viz = (255 * ims.spec / ims.spec.max()).numpy().astype(np.uint8)
-                imageio.imwrite(f"{savePath}/spec_viz/{prtx}{idx:03d}.png")
+                imageio.imwrite(f"{savePath}/spec_viz/{prtx}{idx:03d}.png", spec_viz)
 
             if "roughness" in ims:
                 roughness = (255 * ims.roughness).numpy().astype(np.uint8)
