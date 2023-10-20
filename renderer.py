@@ -214,6 +214,7 @@ def evaluate(
     os.makedirs(savePath, exist_ok=True)
     os.makedirs(savePath + "/color", exist_ok=True)
     os.makedirs(savePath + "/rgbd", exist_ok=True)
+    os.makedirs(savePath + "/rgbd_viz", exist_ok=True)
     os.makedirs(savePath + "/normal", exist_ok=True)
     os.makedirs(savePath + "/world_normal", exist_ok=True)
     os.makedirs(savePath + "/normal_err", exist_ok=True)
@@ -431,74 +432,46 @@ def evaluate(
 
             rgb_map = np.concatenate((rgb_map, vis_depth_map), axis=1)
             imageio.imwrite(f"{savePath}/rgbd/{prtx}{idx:03d}.exr", ims.depth.numpy())
-            imageio.imwrite(f"{savePath}/rgbd_viz/{prtx}{idx:03d}.png", (255 * ims.depth / ims.depth.max()).numpy()).astype(np.uint8)
+            rgbd_viz = (255 * ims.depth.squeeze() / ims.depth.max()).numpy().astype(np.uint8)
+            imageio.imwrite(f"{savePath}/rgbd_viz/{prtx}{idx:03d}.png", rgbd_viz)
             imageio.imwrite(f"{savePath}/normal/{prtx}{idx:03d}.png", vis_normal)
-            imageio.imwrite(
-                f"{savePath}/acc_map/{prtx}{idx:03d}.png",
-                (255 * ims.acc_map.reshape(ims.acc_map.shape[:2]).numpy()).astype(
-                    np.uint8
-                ),
-            )
+            acc_map = (255 * ims.acc_map.reshape(ims.acc_map.shape[:2]).numpy()).astype(np.uint8)
+            imageio.imwrite(f"{savePath}/acc_map/{prtx}{idx:03d}.png", acc_map)
             if "albedo" in ims:
                 imageio.imwrite(
                     f"{savePath}/albedo/{prtx}{idx:03d}.png",
                     (ims.albedo.numpy() * 255).astype(np.uint8),
                 )
             if "spec" in ims:
-                imageio.imwrite(
-                    f"{savePath}/spec/{prtx}{idx:03d}.exr", ims.spec.numpy()
-                )
-                imageio.imwrite(
-                    f"{savePath}/spec_viz/{prtx}{idx:03d}.png", (255 * ims.spec / ims.spec.max()).numpy()
-                )
+                imageio.imwrite(f"{savePath}/spec/{prtx}{idx:03d}.exr", ims.spec.numpy())
+                spec_viz = (255 * ims.spec / ims.spec.max()).numpy().astype(np.uint8)
+                imageio.imwrite(f"{savePath}/spec_viz/{prtx}{idx:03d}.png")
 
             if "roughness" in ims:
-                imageio.imwrite(
-                    f"{savePath}/roughness/{prtx}{idx:03d}.png",
-                    (255 * ims.roughness).numpy().astype(np.uint8),
-                )
+                roughness = (255 * ims.roughness).numpy().astype(np.uint8)
+                imageio.imwrite(f"{savePath}/roughness/{prtx}{idx:03d}.png", roughness)
             if "tint" in ims:
-                imageio.imwrite(
-                    f"{savePath}/tint/{prtx}{idx:03d}.png",
-                    (255 * ims.tint.numpy()).astype(np.uint8),
-                )
+                tint = (255 * ims.tint.numpy()).astype(np.uint8)
+                imageio.imwrite(f"{savePath}/tint/{prtx}{idx:03d}.png", tint)
             if "diffuse" in ims:
-                imageio.imwrite(
-                    f"{savePath}/diffuse/{prtx}{idx:03d}.png",
-                    (255 * ims.diffuse.clamp(0, 1).numpy()).astype(np.uint8),
-                )
-            imageio.imwrite(
-                f"{savePath}/world_normal/{prtx}{idx:03d}.png", vis_world_normal
-            )
-            imageio.imwrite(f"{savePath}/err/{prtx}{idx:03d}.png", err_map)
-            imageio.imwrite(
-                f"{savePath}/surf_width/{prtx}{idx:03d}.png",
-                ims.surf_width.reshape(ims.surf_width.shape[:2])
-                .numpy()
-                .astype(np.uint8),
-            )
+                diffuse = (255 * ims.diffuse.clamp(0, 1).numpy()).astype(np.uint8)
+                imageio.imwrite(f"{savePath}/diffuse/{prtx}{idx:03d}.png", diffuse)
 
-            cross_section = (ims.cross_section.clamp(0, 1).numpy() * 255).astype(
-                "uint8"
-            )
-            imageio.imwrite(
-                f"{savePath}/cross_section/{prtx}{idx:03d}.png", cross_section
-            )
+            imageio.imwrite(f"{savePath}/world_normal/{prtx}{idx:03d}.png", vis_world_normal)
+            imageio.imwrite(f"{savePath}/err/{prtx}{idx:03d}.png", err_map)
+            surf_width = ims.surf_width.reshape(ims.surf_width.shape[:2]).numpy().astype(np.uint8)
+            imageio.imwrite(f"{savePath}/surf_width/{prtx}{idx:03d}.png", surf_width)
+            cross_section = (ims.cross_section.clamp(0, 1).numpy() * 255).astype("uint8")
+            imageio.imwrite(f"{savePath}/cross_section/{prtx}{idx:03d}.png", cross_section)
             # debug = 255*data.debug_map.clamp(0, 1)
             if "env_map" in ims:
-                imageio.imwrite(
-                    f"{savePath}/envmaps/{prtx}ref_map_{idx:03d}.png", ims.env_map
-                )
+                imageio.imwrite(f"{savePath}/envmaps/{prtx}ref_map_{idx:03d}.png", ims.env_map)
                 # imageio.imwrite(f'{savePath}/envmaps/{prtx}view_map_{idx:03d}.png', data.col_map)
         torch.cuda.empty_cache()
 
     tensorf.train()
-    imageio.mimwrite(
-        f"{savePath}/{prtx}video.mp4", np.stack(rgb_maps), fps=30, quality=10
-    )
-    imageio.mimwrite(
-        f"{savePath}/{prtx}depthvideo.mp4", np.stack(depth_maps), fps=30, quality=10
-    )
+    imageio.mimwrite(f"{savePath}/{prtx}video.mp4", np.stack(rgb_maps), fps=30, quality=10)
+    imageio.mimwrite(f"{savePath}/{prtx}depthvideo.mp4", np.stack(depth_maps), fps=30, quality=10)
     # for i in range(100):
     #     env_map, col_map = tensorf.recover_envmap(1024)
     #     # plt.imshow(col_map.cpu())
