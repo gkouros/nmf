@@ -13,7 +13,7 @@ datadir: /data
 render_only: false
 render_train: false
 render_test: true
-render_path: false
+render_path: true
 
 add_timestamp: false
 nSamples: 1e6
