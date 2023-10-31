@@ -10,4 +10,4 @@ dataset_dict = {'blender': BlenderDataset,
                'llff':LLFFDataset,
                'tankstemple':TanksTempleDataset,
                'nsvf':NSVF,
-                'own_data':YourOwnDataset}
+               'own_data':YourOwnDataset}

@@ -134,6 +134,7 @@ class BlenderDataset(Dataset):
         self.all_depth = []
         self.normal_paths = []
         self.tint_paths = []
+        self.acc_paths = []
         self.acc_maps = []
 
         tonemap = SRGBTonemap()
@@ -152,9 +153,11 @@ class BlenderDataset(Dataset):
             image_path = os.path.join(self.root_dir, f"{frame['file_path']}{ext}")
             normal_path = os.path.join(self.root_dir, f"{frame['file_path']}_normal{normal_ext}")
             tint_path = os.path.join(self.root_dir, "test", "tint", f"r_{i}{ext}")
+            acc_path = os.path.join(self.root_dir, "test", f"r_{i}_alpha{ext}")
             self.image_paths += [image_path]
             self.normal_paths += [normal_path]
             self.tint_paths += [tint_path]
+            self.acc_paths += [acc_path]
             img = Image.open(image_path)
             # img = imageio.imread(image_path)
 
@@ -165,6 +168,9 @@ class BlenderDataset(Dataset):
             # plt.show()
             if img.shape[0] == 4:
                 self.acc_maps += [img[-1]]
+            elif os.path.exists(self.acc_paths[-1]):
+                self.acc_maps += [np.array(Image.open(self.acc_paths[-1]))[..., None]]
+
             img = img.view(img.shape[0], -1).permute(1, 0)  # (h*w, 4) RGBA
 
             rays_o, rays_d = get_rays(self.directions, c2w)  # both (h*w, 3)
