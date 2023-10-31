@@ -369,6 +369,8 @@ class IntegralEquirect(torch.nn.Module):
         im = im.cpu().numpy()
         # im = cv2.cvtColor(im.astype(np.uint8), cv2.COLOR_RGB2BGR)
         imageio.imwrite(str(path / f"{prefix}pano.exr"), im)
+        im8 = (np.clip(im, 0, 1) * 255).astype(np.uint8)
+        imageio.imwrite(str(path / f"{prefix}pano.png"), im8)
 
     def sa2mip(self, u, saSample, eps=torch.finfo(torch.float32).eps):
         h, w = self.hw()
