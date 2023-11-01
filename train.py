@@ -17,6 +17,7 @@ from tqdm.auto import tqdm
 from dataLoader import dataset_dict
 from modules.integral_equirect import IntegralEquirect
 from modules.tensor_nerf import TensorNeRF
+from samplers.simple_sampler import SimpleSampler
 from mutils import normalize
 from renderer import *
 from utils import *
@@ -31,24 +32,6 @@ os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 renderer = chunk_renderer
-
-
-class SimpleSampler:
-    def __init__(self, total, batch):
-        self.total = total
-        self.batch = batch
-        self.curr = total
-        self.ids = None
-
-    def nextids(self, batch=None):
-        batch = self.batch if batch is None else batch
-        self.curr += batch
-        if self.curr + batch > self.total:
-            # self.ids = torch.LongTensor(np.random.permutation(self.total))
-            self.ids = torch.randperm(self.total, dtype=torch.long, device=device)
-            self.curr = 0
-        ids = self.ids[self.curr : self.curr + batch]
-        return ids, ids
 
 
 @torch.no_grad()
@@ -94,9 +77,6 @@ def render_test(args):
     #     tensorf.bright_sampler.update(tensorf.bg_module)
     if args.fixed_bg is not None:
         bg_sd = torch.load(args.fixed_bg)
-        from modules import bg_modules
-
-        # bg_module = bg_modules.HierarchicalCubeMap(bg_resolution=2048, num_levels=1, featureC=128, activation='softplus', power=2, lr=1e-2)
         bg_module = IntegralEquirect(
             bg_resolution=512,
             mipbias=0,
@@ -256,14 +236,11 @@ def reconstruction(args):
 
     # TODO REMOVE
     if args.fixed_bg is not None:
-        bg_sd = torch.load(args.fixed_bg)
-        # from modules import bg_modules
-        # bg_module = bg_modules.HierarchicalCubeMap(bg_resolution=2048, num_levels=1, featureC=128, activation='softplus', power=2, lr=1e-2)
-        # bg_module.load_state_dict(bg_sd, strict=False)
-        # bg_module.lr = 0
-        # tensorf.bg_module = bg_module
-        # if tensorf.bright_sampler is not None:
-        #     tensorf.bright_sampler.update(tensorf.bg_module)
+        if args.fixed_bg.endswith('th'):
+            bg_sd = torch.load(args.fixed_bg)
+        else:
+            bg_sd = imageio.imread(args.fixed_bg)
+
         bg_module = IntegralEquirect(
             bg_resolution=512,
             mipbias=0,
@@ -906,8 +883,8 @@ def train(cfg: DictConfig):
     torch.set_default_dtype(torch.float32)
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
-    # logger.info(cfg.dataset)
-    # logger.info(cfg.model)
+    logger.info(cfg.dataset)
+    logger.info(cfg.model)
     cfg.model.arch.rf = cfg.field
 
     if cfg.render_only:
