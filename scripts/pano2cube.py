@@ -1,5 +1,10 @@
-from modules import tonemap, bg_modules
+# import sys
+# sys.path.append('..')
+
+import os
+from modules import tonemap
 import imageio
+import cv2
 from icecream import ic
 import torch
 import numpy as np
@@ -10,6 +15,8 @@ from pathlib import Path
 # from models.cubemap_conv import cubemap_convolve, create_blur_pyramid
 from modules.integral_equirect import IntegralEquirect
 import argparse
+
+os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
 
 parser = argparse.ArgumentParser()
 parser.add_argument('input', type=str)
@@ -29,7 +36,7 @@ tm = tonemap.LinearTonemap()
 # bg_module = bg_modules.HierarchicalBG(3, bg_modules.DualParaboloidUnwrap(b=1.01), bg_resolution=2000, num_levels=5, activation='softplus', power=2)
 
 bg_module = IntegralEquirect(
-    bg_resolution = 1024,
+    bg_resolution = 512,
     mipbias = 0,
     activation = 'exp',
     lr = 0.001,
@@ -46,7 +53,7 @@ bg_module = IntegralEquirect(
 # bg_module = render_modules.MLPRender_FP(0, None, ish.ListISH([0,1,2,4,8,16]), -1, 256, 6)
 ic(bg_module)
 bg_module = bg_module.to(device)
-pano = imageio.imread(args.input)
+pano = cv2.imread(args.input, -1)
 optim = torch.optim.Adam(bg_module.get_optparam_groups(), lr=0.001)
 # optim = torch.optim.Adam(bg_module.parameters(), lr=1.0)
 # optim = torch.optim.SGD(bg_module.parameters(), lr=0.5, momentum=0.99, weight_decay=0)
