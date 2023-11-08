@@ -185,7 +185,9 @@ def reconstruction(args):
         is_stack=False,
         stack_norms=stack_norms,
         white_bg=white_bg,
+        patch_size=args.dataset.get("patch_size", 1),
     )
+    train_dataset[0]
     test_dataset = dataset(
         os.path.join(args.datadir, args.dataset.scenedir),
         split="test",
@@ -294,7 +296,7 @@ def reconstruction(args):
         )
     else:
         mask = None
-    trainingSampler = SimpleSampler(allrays.shape[0], params.batch_size)
+    trainingSampler = SimpleSampler(allrays.shape[0], params.batch_size, device)
 
     ortho_reg_weight = params.ortho_weight
     logger.info("initial ortho_reg_weight", ortho_reg_weight)
@@ -884,7 +886,7 @@ def train(cfg: DictConfig):
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
     logger.info(cfg.dataset)
-    logger.info(cfg.model)
+    # logger.info(cfg.model)
     cfg.model.arch.rf = cfg.field
 
     if cfg.render_only:
