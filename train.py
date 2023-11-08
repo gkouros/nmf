@@ -187,7 +187,6 @@ def reconstruction(args):
         white_bg=white_bg,
         patch_size=args.dataset.get("patch_size", 1),
     )
-    train_dataset[0]
     test_dataset = dataset(
         os.path.join(args.datadir, args.dataset.scenedir),
         split="test",
