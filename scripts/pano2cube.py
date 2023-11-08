@@ -54,6 +54,8 @@ bg_module = IntegralEquirect(
 ic(bg_module)
 bg_module = bg_module.to(device)
 pano = cv2.imread(args.input, -1)
+pano = cv2.cvtColor(pano, cv2.COLOR_BGR2RGB)
+
 optim = torch.optim.Adam(bg_module.get_optparam_groups(), lr=0.001)
 # optim = torch.optim.Adam(bg_module.parameters(), lr=1.0)
 # optim = torch.optim.SGD(bg_module.parameters(), lr=0.5, momentum=0.99, weight_decay=0)
