@@ -29,6 +29,7 @@ class BlenderDataset(Dataset):
         N_vis=-1,
         white_bg=True,
         is_testing=False,
+        patch_size=1,
     ):
         self.downsample = downsample
         self.N_vis = N_vis
@@ -38,6 +39,7 @@ class BlenderDataset(Dataset):
         self.stack_norms = stack_norms
         self.white_bg = white_bg
         self.is_testing = is_testing or split == "test"
+        self.patch_size = patch_size
         self.define_transforms()
         if self.stack_norms:
             print("Stacking normals")
@@ -89,6 +91,7 @@ class BlenderDataset(Dataset):
 
         w, h = int(self.meta["w"] / self.downsample), int(self.meta["h"] / self.downsample)
         self.img_wh = [w, h]
+        self.num_img_patches = (w - self.patch_size + 1) * (h - self.patch_size + 1)
         print(f"Original Image size: {self.meta['w']} x {self.meta['h']}")
         print(f"Image size: {w} x {h}")
         if "aabb_scale" in self.meta:
@@ -142,9 +145,8 @@ class BlenderDataset(Dataset):
             1 if self.N_vis < 0 else len(self.meta["frames"]) // self.N_vis
         )
         idxs = list(range(0, len(self.meta["frames"]), img_eval_interval))
-        for i in tqdm(
-            idxs, desc=f"Loading data {self.split} ({len(idxs)})"
-        ):  # img_list:#
+        self.num_patches = self.num_img_patches * len(idxs)
+        for i in tqdm(idxs, desc=f"Loading data {self.split} ({len(idxs)})"):
             frame = self.meta["frames"][i]
             pose = np.array(frame["transform_matrix"]) @ self.blender2opencv
             c2w = torch.FloatTensor(pose)
@@ -253,12 +255,20 @@ class BlenderDataset(Dataset):
 
     def __getitem__(self, idx):
         if self.split == "train":  # use data in the buffers
-            sample = {"rays": self.all_rays[idx], "rgbs": self.all_rgbs[idx]}
-
+            if self.patch_size == 1:
+                sample = {"rays": self.all_rays[idx], "rgbs": self.all_rgbs[idx]}
+            else:
+                w, h = self.img_wh
+                patch_idx = torch.randint(high=self.num_patches, size=(1,))[0].item()
+                img_idx = patch_idx // self.num_img_patches
+                patch_idx = patch_idx % self.num_img_patches
+                row, col = patch_idx // (w - self.patch_size + 1), patch_idx % (w - self.patch_size + 1)
+                start_idx = img_idx * w * h + row * w + col
+                idxs = start_idx + torch.cat([torch.arange(self.patch_size) + i * w for i in range(self.patch_size)])
+                sample = {'rays': self.all_rays[idxs], 'rgbs': self.all_rgbs[idxs]}
         else:  # create data for each image separately
             img = self.all_rgbs[idx]
             rays = self.all_rays[idx]
             mask = self.all_masks[idx]  # for quantity evaluation
-
             sample = {"rays": rays, "rgbs": img, "mask": mask}
         return sample
