@@ -14,7 +14,7 @@ from torchvision import transforms as T
 from tqdm import tqdm
 
 from modules.tonemap import SRGBTonemap
-
+from .llff import get_spiral
 from .ray_utils import *
 
 
@@ -223,6 +223,11 @@ class BlenderDataset(Dataset):
                 ..., :3
             ]  # (len(self.meta['frames]),h,w,3)
             # self.all_masks = torch.stack(self.all_masks, 0).reshape(-1,*self.img_wh[::-1])  # (len(self.meta['frames]),h,w,3)
+
+        # generate render path
+        self.near_fars = torch.tensor(self.near_far).repeat(len(self.poses), 1)
+        self.render_path = get_spiral(self.poses[:, :3], self.near_fars)
+
 
     def define_transforms(self):
         self.transform = T.ToTensor()
