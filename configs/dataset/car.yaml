@@ -6,4 +6,3 @@ ndc_ray: false
 near_far: [2, 5]
 stack_norms: false
 gt_bg: forest.exr
-patch_size: 1
