@@ -1,11 +1,13 @@
 import cv2,torch
 import numpy as np
+import functools
 from PIL import Image
 import torchvision.transforms as T
 import torch.nn.functional as F
+from torch.optim import lr_scheduler
 import scipy.signal
 import torch.nn as nn
-from itertools import product 
+from itertools import product
 from icecream import ic
 
 mse2psnr = lambda x : -10. * torch.log(x) / torch.log(torch.Tensor([10.]))
@@ -147,7 +149,7 @@ class TVLoss(nn.Module):
         else:
             h_tv = x[:,:,1:,:-1]-x[:,:,:-1,:-1]
             w_tv = x[:,:,:-1,1:]-x[:,:,:-1,:-1]
-            
+
             return (w_tv**2 + h_tv**2 + 1e-5).sqrt().mean()
 
 
@@ -243,7 +245,7 @@ def snells_law(r, n, l):
     return refractdir.type(dtype)
 
 def fresnel_law(ior1, ior2, n, l, o):
-    # input: 
+    # input:
     #  n: (B, 3) surface outward normal
     #  l: (B, 3) light direction towards surface
     #  o: (B, 3) refracted light direction given by snells_law
@@ -309,19 +311,19 @@ class AlphaGridMask(torch.nn.Module):
         else:
             return normed
 
-    def contract_coord(self, xyz_sampled): 
+    def contract_coord(self, xyz_sampled):
         dist = torch.linalg.norm(xyz_sampled[..., :3], dim=1, keepdim=True) + 1e-8
         direction = xyz_sampled[..., :3] / dist
         contracted = torch.where(dist > 1, (2-1/dist), dist) * direction
         return torch.cat([ contracted, xyz_sampled[..., 3:] ], dim=-1)
 
 def log_lerp(t, v0, v1):
-  """Interpolate log-linearly from `v0` (t=0) to `v1` (t=1)."""
-  if v0 <= 0 or v1 <= 0:
-    raise ValueError(f'Interpolants {v0} and {v1} must be positive.')
-  lv0 = np.log(v0)
-  lv1 = np.log(v1)
-  return np.exp(np.clip(t, 0, 1) * (lv1 - lv0) + lv0)
+    """Interpolate log-linearly from `v0` (t=0) to `v1` (t=1)."""
+    if v0 <= 0 or v1 <= 0:
+        raise ValueError(f'Interpolants {v0} and {v1} must be positive.')
+    lv0 = np.log(v0)
+    lv1 = np.log(v1)
+    return np.exp(np.clip(t, 0, 1) * (lv1 - lv0) + lv0)
 
 
 def learning_rate_decay(step,
@@ -330,30 +332,56 @@ def learning_rate_decay(step,
                         max_steps,
                         lr_delay_steps=0,
                         lr_delay_mult=1):
-  """Continuous learning rate decay function.
+    """Continuous learning rate decay function.
 
-  The returned rate is lr_init when step=0 and lr_final when step=max_steps, and
-  is log-linearly interpolated elsewhere (equivalent to exponential decay).
-  If lr_delay_steps>0 then the learning rate will be scaled by some smooth
-  function of lr_delay_mult, such that the initial learning rate is
-  lr_init*lr_delay_mult at the beginning of optimization but will be eased back
-  to the normal learning rate when steps>lr_delay_steps.
+    The returned rate is lr_init when step=0 and lr_final when step=max_steps, and
+    is log-linearly interpolated elsewhere (equivalent to exponential decay).
+    If lr_delay_steps>0 then the learning rate will be scaled by some smooth
+    function of lr_delay_mult, such that the initial learning rate is
+    lr_init*lr_delay_mult at the beginning of optimization but will be eased back
+    to the normal learning rate when steps>lr_delay_steps.
 
-  Args:
-    step: int, the current optimization step.
-    lr_init: float, the initial learning rate.
-    lr_final: float, the final learning rate.
-    max_steps: int, the number of steps during optimization.
-    lr_delay_steps: int, the number of steps to delay the full learning rate.
-    lr_delay_mult: float, the multiplier on the rate when delaying it.
+    Args:
+        step: int, the current optimization step.
+        lr_init: float, the initial learning rate.
+        lr_final: float, the final learning rate.
+        max_steps: int, the number of steps during optimization.
+        lr_delay_steps: int, the number of steps to delay the full learning rate.
+        lr_delay_mult: float, the multiplier on the rate when delaying it.
 
-  Returns:
-    lr: the learning for current step 'step'.
-  """
-  if lr_delay_steps > 0:
-    # A kind of reverse cosine decay.
-    delay_rate = lr_delay_mult + (1 - lr_delay_mult) * np.sin(
-        0.5 * np.pi * np.clip(step / lr_delay_steps, 0, 1))
-  else:
-    delay_rate = 1.
-  return delay_rate * log_lerp(step / max_steps, lr_init, lr_final)
+    Returns:
+        lr: the learning for current step 'step'.
+    """
+    if lr_delay_steps > 0:
+        # A kind of reverse cosine decay.
+        delay_rate = lr_delay_mult + (1 - lr_delay_mult) * np.sin(
+            0.5 * np.pi * np.clip(step / lr_delay_steps, 0, 1))
+    else:
+        delay_rate = 1.
+    return delay_rate * log_lerp(step / max_steps, lr_init, lr_final)
+
+
+# initialize optimizer and lr scheduler
+def init_optimizer(tensorf, grad_vars, params):
+    # optimizer = torch.optim.RMSProp(grad_vars, eps=params.eps)
+    optimizer = torch.optim.Adam(grad_vars, betas=params.betas, eps=params.eps)
+    # optimizer = torch.optim.RMSprop(grad_vars, eps=params.eps)
+    if params.lr is not None:
+        optimizer = torch.optim.Adam(tensorf.parameters(), lr=params.lr, betas=params.betas, eps=params.eps)
+    else:
+        optimizer = torch.optim.Adam(
+            grad_vars,
+            betas=params.betas,
+            eps=params.eps,
+            weight_decay=params.weight_decay,
+        )
+    compute_lambda = functools.partial(
+        learning_rate_decay,
+        lr_init=params.lr_init,
+        lr_final=params.lr_final,
+        max_steps=params.n_iters,
+        lr_delay_steps=params.lr_delay_steps,
+        lr_delay_mult=params.lr_delay_mult,
+    )
+    scheduler = lr_scheduler.LambdaLR(optimizer, compute_lambda)
+    return optimizer, scheduler
