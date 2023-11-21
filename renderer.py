@@ -425,9 +425,9 @@ def evaluate(
 
         if savePath is not None:
             if tensorf.hdr:
-                imageio.imwrite(f"{savePath}/{prtx}{idx:03d}.exr", tensorf.tonemap.inverse(ims.rgb_map))
+                imageio.imwrite(f"{savePath}/color/{prtx}{idx:03d}.exr", tensorf.tonemap.inverse(ims.rgb_map))
             else:
-                imageio.imwrite(f"{savePath}/{prtx}{idx:03d}.png", rgb_map)
+                imageio.imwrite(f"{savePath}/color/{prtx}{idx:03d}.png", rgb_map)
 
             rgb_map = np.concatenate((rgb_map, vis_depth_map), axis=1)
             imageio.imwrite(f"{savePath}/rgbd/{prtx}{idx:03d}.exr", ims.depth.numpy())
