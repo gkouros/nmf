@@ -207,6 +207,30 @@ class TensorNeRF(torch.nn.Module):
         bg = self.bg_module(viewdirs, roughness)
         return bg.reshape(-1, 3)
 
+    def set_fixed_bg(bg_path, tensorf):
+        if pg_path.endswith('th'):
+            bg_sd = torch.load(bg_path)
+        else:
+            bg_sd = imageio.imread(bg_path)
+        bg_module = IntegralEquirect(
+            bg_resolution=512,
+            mipbias=0,
+            activation="exp",
+            lr=0.001,
+            init_val=-1.897,
+            mul_lr=0.001,
+            brightness_lr=0,
+            betas=[0.0, 0.0],
+            mul_betas=[0.9, 0.9],
+            mipbias_lr=1e-4,
+            mipnoise=0.0,
+        )
+        bg_module.load_state_dict(bg_sd)
+        bg_module.lr = 0
+        bg_module.mul_lr = 0
+        bg_module.brightness_lr = 0
+        self.bg_module = bg_module
+
     def forward(
         self,
         rays,

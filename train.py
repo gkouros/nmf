@@ -1,5 +1,4 @@
 import datetime
-import functools
 import math
 import os
 import sys
@@ -10,7 +9,6 @@ import torch
 from icecream import ic
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
-from torch.optim import lr_scheduler
 from torch.utils.tensorboard import SummaryWriter
 from tqdm.auto import tqdm
 
@@ -18,6 +16,7 @@ from dataLoader import dataset_dict
 from modules.integral_equirect import IntegralEquirect
 from modules.tensor_nerf import TensorNeRF
 from samplers.simple_sampler import SimpleSampler
+from samplers.patch_sampler import PatchSampler
 from mutils import normalize
 from renderer import *
 from utils import *
@@ -56,7 +55,6 @@ def render_test(args):
     )
     ic(test_dataset.near_far)
     test_dataset.near_far = args.dataset.near_far
-    white_bg = test_dataset.white_bg
     ndc_ray = args.dataset.ndc_ray
 
     ckpt = torch.load(args.ckpt)
@@ -117,6 +115,8 @@ def render_test(args):
         tensorf.bg_module = bg_module.to(device)
 
     logfolder = os.path.dirname(args.ckpt)
+
+    """ Render train path """
     if args.render_train:
         os.makedirs(f"{logfolder}/imgs_train_all", exist_ok=True)
         train_dataset = dataset(
@@ -143,6 +143,7 @@ def render_test(args):
             f'======> {expname} train all psnr: {np.mean(test_res["psnrs"])} <========================'
         )
 
+    """ Render test views """
     if args.render_test:
         folder = f"{logfolder}/imgs_test_all"
         os.makedirs(folder, exist_ok=True)
@@ -160,24 +161,38 @@ def render_test(args):
             device=device,
         )
 
-    #  if args.render_path:
-    #      c2ws = test_dataset.render_path
-    #      os.makedirs(f'{logfolder}/imgs_path_all', exist_ok=True)
-    #      evaluation_path(test_dataset,tensorf, c2ws, renderer, f'{logfolder}/{args.expname}/imgs_path_all/',
-    #                      N_vis=-1, N_samples=-1, white_bg = white_bg, ndc_ray=ndc_ray,device=device, bundle_size=args.bundle_size)
-
+    """ Render test path """
+    torch.cuda.empty_cache()
+    if args.render_path:
+        c2ws = test_dataset.render_path
+        # c2ws = test_dataset.poses
+        logger.info("========>", c2ws.shape)
+        os.makedirs(f"{logfolder}/imgs_path_all", exist_ok=True)
+        evaluation_path(
+            test_dataset,
+            tensorf,
+            c2ws,
+            renderer,
+            f"{logfolder}/imgs_path_all/",
+            N_vis=-1,
+            N_samples=-1,
+            white_bg=white_bg,
+            ndc_ray=ndc_ray,
+            device=device,
+            gt_bg=gt_bg,
+            bundle_size=args.bundle_size
+        )
 
 def reconstruction(args):
     params = args.model.params
     expname = f"{args.dataset.scenedir.split('/')[-1]}_{args.expname}"
     ic(expname)
 
-    # init dataset
+    # init training and testing datasets
     dataset = dataset_dict[args.dataset.dataset_name]
-    stack_norms = (
-        args.dataset.stack_norms if hasattr(args.dataset, "stack_norms") else False
-    )
-    white_bg = args.dataset.white_bg if hasattr(args.dataset, "white_bg") else True
+    stack_norms = args.dataset.get("stack_norms", False)
+    white_bg = args.dataset.get("white_bg", True)
+    patch_size = args.dataset.get("patch_size", 1)
     train_dataset = dataset(
         os.path.join(args.datadir, args.dataset.scenedir),
         split="train",
@@ -185,7 +200,7 @@ def reconstruction(args):
         is_stack=False,
         stack_norms=stack_norms,
         white_bg=white_bg,
-        patch_size=args.dataset.get("patch_size", 1),
+        patch_size=patch_size,
     )
     test_dataset = dataset(
         os.path.join(args.datadir, args.dataset.scenedir),
@@ -195,10 +210,8 @@ def reconstruction(args):
         white_bg=white_bg,
         is_testing=True,
     )
-    white_bg = train_dataset.white_bg
     if hasattr(args.dataset, 'near_far'):
         train_dataset.near_far = args.dataset.near_far
-    near_far = train_dataset.near_far
     ndc_ray = args.dataset.ndc_ray
 
     if args.add_timestamp:
@@ -212,58 +225,24 @@ def reconstruction(args):
     os.makedirs(f"{logfolder}/imgs_vis", exist_ok=True)
     summary_writer = SummaryWriter(logfolder)
 
-    aabb_scale = (
-        1 if not hasattr(args.dataset, "aabb_scale") else args.dataset.aabb_scale
-    )
+    aabb_scale = (1 if not hasattr(args.dataset, "aabb_scale") else args.dataset.aabb_scale)
     aabb = train_dataset.scene_bbox.to(device) * aabb_scale
 
-    tensorf = hydra.utils.instantiate(args.model.arch)(
-        aabb=aabb, near_far=train_dataset.near_far
-    )
+    tensorf = hydra.utils.instantiate(args.model.arch)(aabb=aabb, near_far=train_dataset.near_far)
     if args.ckpt is not None:
         # TODO REMOVE
         ckpt = torch.load(args.ckpt)
         tensorf = TensorNeRF.load(ckpt, args.model.arch, strict=False)
 
-        # del ckpt['state_dict']['bg_module.bg_mats.0']
-        # del ckpt['state_dict']['bg_module.bg_mats.1']
-        # del ckpt['state_dict']['bg_module.bg_mats.2']
-        # tensorf2 = TensorNeRF.load(ckpt, strict=False)
-        # tensorf.normal_module = tensorf2.normal_module
-        # tensorf.rf = tensorf2.rf
-        # tensorf.diffuse_module = tensorf2.diffuse_module
-        # grid_size = N_to_reso(params.N_voxel_final, tensorf.rf.aabb)
-        # tensorf.rf.update_stepSize(grid_size)
-
-    # TODO REMOVE
+    # use fixed GT envmap
     if args.fixed_bg is not None:
-        if args.fixed_bg.endswith('th'):
-            bg_sd = torch.load(args.fixed_bg)
-        else:
-            bg_sd = imageio.imread(args.fixed_bg)
+        tensorf.set_fixed_bg(args.fixed_bg)
 
-        bg_module = IntegralEquirect(
-            bg_resolution=512,
-            mipbias=0,
-            activation="exp",
-            lr=0.001,
-            init_val=-1.897,
-            mul_lr=0.001,
-            brightness_lr=0,
-            betas=[0.0, 0.0],
-            mul_betas=[0.9, 0.9],
-            mipbias_lr=1e-4,
-            mipnoise=0.0,
-        )
-        bg_module.load_state_dict(bg_sd)
-        bg_module.lr = 0
-        bg_module.mul_lr = 0
-        bg_module.brightness_lr = 0
-        tensorf.bg_module = bg_module
-
+    # send model to device and set in training mode
     tensorf = tensorf.to(device)
     tensorf.train()
 
+    # setup lr schedule
     lr_bg = 1e-5
     grad_vars = tensorf.get_optparam_groups()
     if args.lr_decay_iters > 0:
@@ -272,213 +251,139 @@ def reconstruction(args):
         args.lr_decay_iters = params.n_iters
         lr_factor = args.lr_decay_target_ratio ** (1 / params.n_iters)
 
-    # smoothing_vals = [0.6, 0.7, 0.8, 0.7, 0.5]
+    # upsampling scheme for envmap
     upsamp_bg = hasattr(params, "bg_upsamp_res") and tensorf.bg_module is not None
     if upsamp_bg:
         res = params.bg_upsamp_res.pop(0)
         lr_bg = params.bg_upsamp_lr.pop(0)
         logger.info(f"Upsampling bg to {res}")
         tensorf.bg_module.upsample(res)
-        ind = [i for i, d in enumerate(grad_vars) if "name" in d and d["name"] == "bg"][
-            0
-        ]
+        ind = [i for i, d in enumerate(grad_vars) if "name" in d and d["name"] == "bg"][0]
         grad_vars[ind]["params"] = tensorf.bg_module.parameters()
         grad_vars[ind]["lr"] = lr_bg
 
     torch.cuda.empty_cache()
     PSNRs, PSNRs_test = [], [0]
 
-    allrays, allrgbs = train_dataset.all_rays, train_dataset.all_rgbs
-    if not ndc_ray and args.filter_rays:
-        allrays, allrgbs, mask = tensorf.filtering_rays(
-            allrays, allrgbs, train_dataset.focal, bbox_only=True
-        )
-    else:
-        mask = None
-    trainingSampler = SimpleSampler(allrays.shape[0], params.batch_size, device)
+    # get rays and gt colors
+    allrays = train_dataset.all_rays.to(device)  # [N*H*W, 6]
+    allrgbs = train_dataset.all_rgbs.to(device)  # [N*H*W, 4]
 
-    ortho_reg_weight = params.ortho_weight
-    logger.info("initial ortho_reg_weight", ortho_reg_weight)
+    # get width and height of images
+    width, height = train_dataset.img_wh
 
-    L1_reg_weight = params.L1_weight_initial
-    logger.info("initial L1_reg_weight", L1_reg_weight)
+    # create ray sampler
+    # trainingSampler = SimpleSampler(allrays.shape[0], params.batch_size, device,
+    trainingSampler = PatchSampler(allrays.shape[0], params.batch_size, width, height, device,
+                                   patch_size=args.dataset.get("patch_size", 1))
+
+    # init total variation
     TV_weight_density, TV_weight_app = params.TV_weight_density, params.TV_weight_app
     tvreg = TVLoss()
-    logger.info(
-        f"initial TV_weight density: {TV_weight_density} appearance: {TV_weight_app}"
-    )
+    logger.info(f"initial TV_weight density: {TV_weight_density} appearance: {TV_weight_app}")
 
-    allrgbs = allrgbs.to(device)
-    allrays = allrays.to(device)
     # ratio of meters to pixels at a distance of 1 meter
     focal = train_dataset.focal[0] if ndc_ray else train_dataset.fx
-    # / train_dataset.img_wh[0]
-    # with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], with_stack=True, record_shapes=True) as prof:
-    logger.info(tensorf)
-    ic(white_bg)
-    # TODO REMOVE
-    # if tensorf.bg_module is not None and not white_bg:
-    #     if True:
-    #         pbar = tqdm(range(args.n_bg_iters), miniters=args.progress_refresh_rate, file=sys.stdout)
-    #         # warm up by training bg
-    #         for _ in pbar:
-    #             ray_idx, rgb_idx = trainingSampler.nextids()
-    #             rays_train, rgba_train = allrays[ray_idx], allrgbs[rgb_idx].reshape(-1, allrgbs.shape[-1])
-    #             rgb_train = rgba_train[..., :3]
-    #             if rgba_train.shape[-1] == 4:
-    #                 alpha_train = rgba_train[..., 3]
-    #             else:
-    #                 alpha_train = None
-    #             roughness = 1e-16*torch.ones(rays_train.shape[0], 1, device=device)
-    #             rgb = tensorf.render_just_bg(rays_train, roughness)
-    #             loss = torch.sqrt((rgb - rgb_train) ** 2 + params.charbonier_eps**2).mean()
-    #             optimizer.zero_grad()
-    #             loss.backward()
-    #             optimizer.step()
-    #             photo_loss = loss.detach().item()
-    #             pbar.set_description(f'psnr={-10.0 * np.log(photo_loss) / np.log(10.0):.04f}')
-    # tensorf.bg_module.save('test.png')
 
+    # update sampler
     tensorf.sampler.update(tensorf.rf, init=True)
+
     # TODO REMOVE
+    # initialize density field with random values
     if args.ckpt is None:
+        # pretraining
         if tensorf.rf.num_pretrain > 0:
             # dparams = tensorf.parameters()
             # space_optim = torch.optim.Adam(tensorf.rf.dbasis_mat.parameters(), lr=0.5, betas=(0.9,0.99))
-            space_optim = torch.optim.Adam(
-                tensorf.parameters(), lr=0.005, betas=(0.9, 0.99)
-            )
+            space_optim = torch.optim.Adam(tensorf.parameters(), lr=0.005, betas=(0.9, 0.99))
             pbar = tqdm(range(tensorf.rf.num_pretrain))
             for _ in pbar:
-                xyz = (torch.rand(20000, 3, device=device) * 2 - 1) * tensorf.rf.aabb[
-                    1
-                ].reshape(1, 3)
+                xyz = (torch.rand(20000, 3, device=device) * 2 - 1) * tensorf.rf.aabb[1].reshape(1, 3)
                 sigma_feat = tensorf.rf.compute_densityfeature(xyz)
-
-                # step_size = 0.015
                 step_size = tensorf.sampler.stepsize
-                alpha = 1 - torch.exp(
-                    -sigma_feat * step_size * tensorf.rf.distance_scale
-                )
-                # ic(alpha.mean(), sigma_feat.mean(), tensorf.rf.distance_scale)
+                alpha = 1 - torch.exp(-sigma_feat * step_size * tensorf.rf.distance_scale)
                 # sigma = 1-torch.exp(-sigma_feat)
                 # loss = (sigma-torch.rand_like(sigma)*args.start_density).abs().mean()
                 # target_alpha = (params.start_density+params.start_density*(2*torch.rand_like(alpha)-1))
-                target_alpha = (
-                    params.start_density
-                    + 0.1 * params.start_density * torch.randn_like(alpha)
-                )
+                target_alpha = (params.start_density + 0.1 * params.start_density * torch.randn_like(alpha))
                 # target_alpha = target_alpha.clip(min=params.start_density/2, max=params.start_density*2)
                 # target_alpha = params.start_density
                 loss = (alpha - target_alpha).abs().mean()
                 # loss = (-sigma[mask].clip(max=1).sum() + sigma[~mask].clip(min=1e-8).sum())
                 space_optim.zero_grad()
                 loss.backward()
-                pbar.set_description(
-                    f"Mean alpha: {alpha.detach().mean().item():.06f}."
-                )
+                pbar.set_description(f"Mean alpha: {alpha.detach().mean().item():.06f}.")
                 space_optim.step()
         elif tensorf.rf.calibrate:
             # calculate alpha mean
-            xyz = (torch.rand(20000, 3, device=device) * 2 - 1) * tensorf.rf.aabb[
-                1
-            ].reshape(1, 3)
+            xyz = (torch.rand(20000, 3, device=device) * 2 - 1) * tensorf.rf.aabb[1].reshape(1, 3)
             sigma_feat = tensorf.rf.compute_densityfeature(xyz)
-
-            # step_size = 0.015
-            target_sigma = -math.log(1 - params.start_density) / (
-                tensorf.sampler.stepsize * tensorf.rf.distance_scale
-            )
+            target_sigma = -math.log(1 - params.start_density) / (tensorf.sampler.stepsize * tensorf.rf.distance_scale)
 
             # compute density_shift assume exponential activation
             density_shift = math.log(target_sigma) - math.log(sigma_feat.mean().item())
-            ic(target_sigma, sigma_feat.mean(), density_shift, sigma_feat.mean())
+            # ic(target_sigma, sigma_feat.mean(), density_shift, sigma_feat.mean())
             tensorf.rf.density_shift += density_shift
             args.field.density_shift = tensorf.rf.density_shift
+
     # tensorf.sampler.mark_untrained_grid(train_dataset.poses, train_dataset.intrinsics)
-    xyz = (torch.rand(20000, 3, device=device) * 2 - 1) * tensorf.rf.aabb[1].reshape(
-        1, 3
-    )
+    xyz = (torch.rand(20000, 3, device=device) * 2 - 1) * tensorf.rf.aabb[1].reshape(1, 3)
     sigma_feat = tensorf.rf.compute_densityfeature(xyz)
     torch.cuda.empty_cache()
     tensorf.sampler.update(tensorf.rf, init=True)
     torch.cuda.empty_cache()
 
+    # calibrate model
     xyz = torch.rand(100000, 4, device=device) * 2 - 1
     xyz[:, 3] *= 0
     sigma_feat = tensorf.rf.compute_densityfeature(xyz)
-    alpha = 1 - torch.exp(
-        -sigma_feat * tensorf.sampler.stepsize * tensorf.rf.distance_scale
-    )
+    alpha = 1 - torch.exp(-sigma_feat * tensorf.sampler.stepsize * tensorf.rf.distance_scale)
     feat = tensorf.rf.compute_appfeature(xyz)
     bg_brightness = tensorf.bg_module.mean_color().detach().mean()
     args = tensorf.model.calibrate(args, xyz, feat, bg_brightness)
 
-    pbar = tqdm(
-        range(params.n_iters), miniters=args.progress_refresh_rate, file=sys.stdout
-    )
+    # initialize optimizer and LR scheduler
+    optimizer, scheduler = init_optimizer(tensorf, grad_vars, params)
 
-    def init_optimizer(grad_vars):
-        # optimizer = torch.optim.RMSProp(grad_vars, eps=params.eps)
-        optimizer = torch.optim.Adam(grad_vars, betas=params.betas, eps=params.eps)
-        # optimizer = torch.optim.RMSprop(grad_vars, eps=params.eps)
-        if params.lr is not None:
-            optimizer = torch.optim.Adam(
-                tensorf.parameters(), lr=params.lr, betas=params.betas, eps=params.eps
-            )
-        else:
-            optimizer = torch.optim.Adam(
-                grad_vars,
-                betas=params.betas,
-                eps=params.eps,
-                weight_decay=params.weight_decay,
-            )
-        compute_lambda = functools.partial(
-            learning_rate_decay,
-            lr_init=params.lr_init,
-            lr_final=params.lr_final,
-            max_steps=params.n_iters,
-            lr_delay_steps=params.lr_delay_steps,
-            lr_delay_mult=params.lr_delay_mult,
-        )
-        scheduler = lr_scheduler.LambdaLR(optimizer, compute_lambda)
-        return optimizer, scheduler
-
-    optimizer, scheduler = init_optimizer(grad_vars)
+    # decay of orientation loss weight
     ori_decay = (
         math.exp(math.log(params.final_ori_lambda / params.ori_lambda) / params.n_iters)
         if params.ori_lambda > 0 and params.final_ori_lambda is not None
         else 1
     )
+    # decay of predicted normal loss weight
     normal_decay = (
-        math.exp(
-            math.log(params.final_pred_lambda / params.pred_lambda) / params.n_iters
-        )
+        math.exp(math.log(params.final_pred_lambda / params.pred_lambda) / params.n_iters)
         if params.pred_lambda > 0 and params.final_pred_lambda is not None
         else 1
     )
-    ic(ori_decay)
-    ic(normal_decay)
 
+    # save config in log dir of experiment
     OmegaConf.save(config=args, f=f"{logfolder}/config.yaml")
+
+    # initialize training params
     num_rays = params.starting_batch_size
     prev_n_samples = None
     hist_n_samples = None
+
+    # load gt background envmap for evaluation
     gt_bg_path = args.gt_bg if args.gt_bg is not None else None
     if hasattr(args.dataset, "gt_bg") and args.dataset.gt_bg is not None:
         gt_bg_path = Path("backgrounds") / args.dataset.gt_bg
     ic(gt_bg_path)
     gt_bg = cv2.imread(str(gt_bg_path)) if gt_bg_path is not None else None
+
+    """ Main training loop """
     if True:
         # with torch.profiler.profile(record_shapes=True, schedule=torch.profiler.schedule(wait=1, warmup=1, active=params.n_iters-1), with_stack=True) as p:
         # with torch.autograd.detect_anomaly():
+        pbar = tqdm(range(params.n_iters), miniters=args.progress_refresh_rate, file=sys.stdout)
         for iteration in pbar:
             optimizer.zero_grad(set_to_none=True)
             losses, roughnesses, envmap_regs, diffuse_regs = [], [], [], []
             brdf_regs = []
             pred_losses, ori_losses = [], []
             TVs = []
-
             lbatch_size = min(
                 params.min_batch_size if num_rays < params.min_batch_size else num_rays,
                 params.max_batch_size,
@@ -501,10 +406,8 @@ def reconstruction(args):
                     case _:
                         raise Exception(f"Unknown bg col: {params.bg_col}")
                 if rgba_train.shape[-1] == 4:
-                    rgb_train = (
-                        rgba_train[:, :3] * rgba_train[:, -1:]
-                        + (1 - rgba_train[:, -1:]) * bg_col
-                    )  # blend A to RGB
+                    # blend A to RGB
+                    rgb_train = (rgba_train[:, :3] * rgba_train[:, -1:] + (1 - rgba_train[:, -1:]) * bg_col)
                     alpha_train = rgba_train[..., 3]
                 else:
                     rgb_train = rgba_train
@@ -644,15 +547,15 @@ def reconstruction(args):
                     #     else:
                     #         tensorf.compute_visibility_loss(params.N_visibility_rays)
 
-                    if ortho_reg_weight > 0:
+                    if params.ortho_weight > 0:
                         loss_reg = tensorf.rf.vector_comp_diffs()
-                        total_loss += ortho_reg_weight * loss_reg
+                        total_loss += params.ortho_weight * loss_reg
                         summary_writer.add_scalar(
                             "train/reg", loss_reg.detach().item(), global_step=iteration
                         )
-                    if L1_reg_weight > 0:
+                    if params.L1_weight_initial > 0:
                         loss_reg_L1 = tensorf.rf.density_L1()
-                        total_loss += L1_reg_weight * loss_reg_L1
+                        total_loss += params.L1_weight_initial * loss_reg_L1
                         summary_writer.add_scalar(
                             "train/reg_l1",
                             loss_reg_L1.detach().item(),
@@ -717,7 +620,7 @@ def reconstruction(args):
                     # summary_writer.add_scalar('train/diffuse_loss', diffuse_reg.detach().item(), global_step=iteration)
                     #
                     # summary_writer.add_scalar('train/lr', list(optimizer.param_groups)[0]['lr'], global_step=iteration)
-                del ray_idx, rgb_idx, rays_train, rgba_train, gt_normal_map, ims, stats
+                del ray_idx, rays_train, rgba_train, gt_normal_map, ims, stats
 
             if params.clip_grad is not None:
                 torch.nn.utils.clip_grad_norm_(tensorf.parameters(), params.clip_grad)
@@ -784,7 +687,7 @@ def reconstruction(args):
             if tensorf.check_schedule(iteration, 1):
                 grad_vars = tensorf.get_optparam_groups()
                 print("reinit optimizer")
-                optimizer, scheduler = init_optimizer(grad_vars)
+                optimizer, scheduler = init_optimizer(tensorf, grad_vars, params)
                 num_rays = params.starting_batch_size
                 prev_n_samples = None
                 hist_n_samples = None
@@ -810,8 +713,10 @@ def reconstruction(args):
 
     # prof.export_chrome_trace('trace.json')
 
+    """ Save checkpoint """
     tensorf.save(f"{logfolder}/{expname}.th", args.model.arch)
 
+    """ Render training views """
     torch.cuda.empty_cache()
     if args.render_train:
         os.makedirs(f"{logfolder}/imgs_train_all", exist_ok=True)
@@ -835,6 +740,7 @@ def reconstruction(args):
             f'======> {expname} test all psnr: {np.mean(test_res["psnrs"])} <========================'
         )
 
+    """ Render test views """
     torch.cuda.empty_cache()
     if args.render_test:
         os.makedirs(f"{logfolder}/imgs_test_all", exist_ok=True)
@@ -858,6 +764,7 @@ def reconstruction(args):
             f'======> {expname} test all psnr: {np.mean(test_res["psnrs"])} <========================'
         )
 
+    """ Render test path """
     torch.cuda.empty_cache()
     if args.render_path:
         c2ws = test_dataset.render_path
@@ -879,6 +786,7 @@ def reconstruction(args):
         )
 
 
+""" Train model """
 @hydra.main(version_base=None, config_path="configs", config_name="default")
 def train(cfg: DictConfig):
     torch.set_default_dtype(torch.float32)
