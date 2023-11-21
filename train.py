@@ -391,11 +391,14 @@ def reconstruction(args):
             num_remaining = lbatch_size
             while num_remaining > 0:
                 lnum_rays = min(num_rays, num_remaining)
-                num_remaining -= lnum_rays
-                ray_idx, rgb_idx = trainingSampler.nextids(lnum_rays)
-                rays_train, rgba_train = allrays[ray_idx].to(device), allrgbs[
-                    rgb_idx
-                ].reshape(-1, allrgbs.shape[-1]).to(device)
+                # lnum_rays must be a multiple of patch_size
+                lnum_rays = max(lnum_rays // patch_size**2 * patch_size**2, patch_size ** 2)
+                num_remaining = max(num_remaining - lnum_rays, 0)
+
+                # sample rays
+                ray_idx = trainingSampler.nextids(lnum_rays)
+                rays_train = allrays[ray_idx].to(device)
+                rgba_train = allrgbs[ray_idx].reshape(-1, allrgbs.shape[-1]).to(device)
                 match params.bg_col:
                     case "rand":
                         bg_col = torch.rand(3, device=device)
@@ -443,7 +446,6 @@ def reconstruction(args):
                         is_train=True,
                         ndc_ray=ndc_ray,
                     )
-
                     n_samples = stats["n_samples"]
                     if n_samples[0] == 0:
                         continue
