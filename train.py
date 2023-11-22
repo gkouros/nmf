@@ -273,7 +273,7 @@ def reconstruction(args):
     width, height = train_dataset.img_wh
 
     # create ray sampler
-    # trainingSampler = SimpleSampler(allrays.shape[0], params.batch_size, device,
+    # trainingSampler = SimpleSampler(allrays.shape[0], params.batch_size, device)
     trainingSampler = PatchSampler(allrays.shape[0], params.batch_size, width, height, device,
                                    patch_size=args.dataset.get("patch_size", 1))
 
@@ -383,6 +383,7 @@ def reconstruction(args):
             losses, roughnesses, envmap_regs, diffuse_regs = [], [], [], []
             brdf_regs = []
             pred_losses, ori_losses = [], []
+            smoothness_losses = []
             TVs = []
             lbatch_size = min(
                 params.min_batch_size if num_rays < params.min_batch_size else num_rays,
@@ -420,7 +421,6 @@ def reconstruction(args):
                     if train_dataset.stack_norms
                     else None
                 )
-
                 with torch.cuda.amp.autocast(enabled=args.fp16):
                     ims, stats = renderer(
                         rays_train,
@@ -428,6 +428,7 @@ def reconstruction(args):
                         gt_normals=gt_normal_map,
                         keys=[
                             "rgb_map",
+                            "depth_map",
                             "normal_err",
                             "distortion_loss",
                             "prediction_loss",
@@ -455,33 +456,25 @@ def reconstruction(args):
                     envmap_reg = stats["envmap_reg"].sum()
                     brdf_reg = stats["brdf_reg"].sum()
                     rgb_map = ims["rgb_map"]
+                    depth_map_valid = ims["depth_map"]
                     if not train_dataset.hdr:
                         rgb_map = rgb_map.clip(max=1)
                     whole_valid = stats["whole_valid"]
+
+                    """ Photometric Loss """
                     if params.charbonier_loss:
-                        loss = torch.sqrt(
-                            (rgb_map - rgb_train[whole_valid]) ** 2
-                            + params.charbonier_eps**2
-                        ).sum()
+                        loss = torch.sqrt((rgb_map - rgb_train[whole_valid]) ** 2 + params.charbonier_eps**2).sum()
                     else:
                         # loss = ((rgb_map - rgb_train[whole_valid]) ** 2).mean()
                         if tensorf.hdr:
                             loss = (
-                                F.huber_loss(
-                                    rgb_map,
-                                    rgb_train[whole_valid],
-                                    delta=1,
-                                    reduction="none",
-                                )
+                                F.huber_loss(rgb_map, rgb_train[whole_valid], delta=1, reduction="none")
                                 # .clip(min=torch.finfo(rgb_map.dtype).eps)
                                 # .sqrt()
                                 .sum()
                             )
                         else:
-                            loss = (
-                                (rgb_map.clip(0, 1) - rgb_train[whole_valid].clip(0, 1))
-                                ** 2
-                            ).sum()
+                            loss = ((rgb_map.clip(0, 1) - rgb_train[whole_valid].clip(0, 1)) ** 2).sum()
                         # loss = ((rgb_map.clip(0, 1) - rgb_train[whole_valid].clip(0, 1)).abs()).sum()
                     norm_err = (
                         sum(stats["normal_err"])
@@ -489,11 +482,22 @@ def reconstruction(args):
                         else stats["normal_err"].sum()
                     )
                     # photo_loss = ((rgb_map.clip(0, 1) - rgb_train[whole_valid].clip(0, 1)) ** 2).mean().detach()
-                    photo_loss = (
-                        ((rgb_map.clip(0, 1) - rgb_train[whole_valid].clip(0, 1)) ** 2)
-                        .mean()
-                        .detach()
-                    )
+                    photo_loss = (((rgb_map.clip(0, 1) - rgb_train[whole_valid].clip(0, 1)) ** 2).mean().detach())
+
+                    """ Depth smoothness loss """
+                    if patch_size > 1 and params.smoothness_gamma > 0:
+                        depth_map = torch.zeros_like(whole_valid, dtype=depth_map_valid.dtype)
+                        depth_map[whole_valid] = depth_map_valid
+                        depth_map = depth_map.reshape(-1, patch_size ** 2)  # (B/(P*P), P*P)
+                        patch_mid_offset = patch_size ** 2 // 2  # offset to middle point of patch
+                        delta_depth = (depth_map - depth_map[:, patch_mid_offset, None]).abs()  # patch depth differences from mid
+                        rgb_patches = rgb_train.reshape(-1, patch_size ** 2, rgb_train.shape[-1])  # (B/(P*P), P*P, 3)
+                        delta_rgb = rgb_patches - rgb_patches[:, None, patch_mid_offset]  # (B/(P*P), P*P, 3) color difference of patch from mid
+                        weights = torch.exp(-delta_rgb.mean(axis=-1).abs() / params.smoothness_gamma)  # patch color consistency weights
+                        smoothness_loss = (weights * delta_depth).sum()  # the smoothness loss
+                    else:
+                        smoothness_loss = torch.tensor(0.0, device=device)
+
                     ori_loss = stats["ori_loss"].sum()
 
                     # adjust number of rays
@@ -517,26 +521,25 @@ def reconstruction(args):
                     #     gt_normal_map = gt_normal_map[~whole_valid]
 
                     # loss
-                    # ori_lambda = params.ori_lambda if iteration > 1000 else params.ori_lambda * iteration / 1000
-                    # pred_lambda = params.pred_lambda if iteration > 500 else params.pred_lambda * iteration / 500
-                    ori_lambda = params.ori_lambda
-                    pred_lambda = params.pred_lambda
+                    # print losses
                     # ic(pred_lambda, ori_lambda, loss,
-                    #     params.distortion_lambda*distortion_loss,
-                    #     ori_lambda*ori_loss,
+                    #     params.distortion_lambda * distortion_loss,
+                    #     params.ori_lambda * ori_loss,
                     #     params.envmap_lambda * (envmap_reg-0.05).clip(min=0),
                     #     params.diffuse_lambda * diffuse_reg,
                     #     params.brdf_lambda * brdf_reg,
-                    #     pred_lambda * prediction_loss)
+                    #     params.pred_lambda * prediction_loss,
+                    #     params.normal_err_lambda * norm_err)
                     total_loss = (
                         loss
                         + params.distortion_lambda * distortion_loss
-                        + ori_lambda * ori_loss
+                        + params.ori_lambda * ori_loss
                         + params.envmap_lambda * envmap_reg
                         + params.diffuse_lambda * diffuse_reg
                         + params.brdf_lambda * brdf_reg
-                        + pred_lambda * prediction_loss
+                        + params.pred_lambda * prediction_loss
                         + params.normal_err_lambda * norm_err
+                        + params.smoothness_lambda * smoothness_loss
                     )
 
                     # if tensorf.visibility_module is not None:
@@ -598,20 +601,13 @@ def reconstruction(args):
 
                     TVs.append(float(loss_tv))
                     ori_losses.append(params.ori_lambda * ori_loss.detach().item())
-                    pred_losses.append(
-                        params.pred_lambda * prediction_loss.detach().item()
-                    )
+                    pred_losses.append(params.pred_lambda * prediction_loss.detach().item())
                     losses.append(total_loss.detach().item())
                     # roughnesses.append(ims['roughness'].mean().detach().item())
-                    diffuse_regs.append(
-                        params.diffuse_lambda
-                        * diffuse_reg.detach().item()
-                        / lbatch_size
-                    )
-                    envmap_regs.append(
-                        params.envmap_lambda * envmap_reg.detach().item() / lbatch_size
-                    )
+                    diffuse_regs.append(params.diffuse_lambda * diffuse_reg.detach().item() / lbatch_size)
+                    envmap_regs.append(params.envmap_lambda * envmap_reg.detach().item() / lbatch_size)
                     brdf_regs.append(params.brdf_lambda * brdf_reg.detach().item())
+                    smoothness_losses.append(params.smoothness_lambda * smoothness_loss.detach().item())
                     PSNRs.append(-10.0 * np.log(photo_loss) / np.log(10.0))
 
                     # summary_writer.add_scalar('train/PSNR', PSNRs[-1], global_step=iteration)
@@ -671,6 +667,7 @@ def reconstruction(args):
                     + f" envmap = {float(np.sum(envmap_regs)):.5f}"
                     + f" diffuse = {float(np.sum(diffuse_regs)):.5f}"
                     + f" brdf = {float(np.sum(brdf_regs)):.5f}"
+                    + f" smooth = {float(np.sum(smoothness_losses)):.5f}"
                     + f" nrays = {[num_rays] + tensorf.model.max_retrace_rays}"
                 )
                 # f' rough = {float(np.mean(roughnesses)):.5f}' + \

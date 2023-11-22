@@ -88,9 +88,7 @@ class TensorNeRF(torch.nn.Module):
         self.geonorm_iters = geonorm_iters
         self.geonorm_interp_iters = geonorm_interp_iters
         self.recur_stepmul = recur_stepmul
-
         self.detach_inter = detach_inter
-
         self.use_predicted_normals = (
             use_predicted_normals and self.normal_module is not None
         )
@@ -259,12 +257,12 @@ class TensorNeRF(torch.nn.Module):
         device = rays.device
 
         (
-            xyz_sampled,
-            ray_valid,
-            max_samps,
-            z_vals,
-            dists,
-            whole_valid,
+            xyz_sampled, # xyz_sampled: (M, 4) float. premasked valid sample points.
+            ray_valid,  # (b, N) bool. valid points until acc termination of ray.
+            max_samps,  # = N, int. The number of samples per ray.
+            z_vals,  # (b, N) float. distance along ray to sample.
+            dists,  # (b, N) float. distance between samples.
+            whole_valid,  # (N,) bool. mask into origin rays of which B rays were able to be fully sampled.
         ) = self.sampler.sample(
             rays,
             focal,
@@ -277,22 +275,15 @@ class TensorNeRF(torch.nn.Module):
             N_samples=N_samples,
             rf=self.rf,
         )
-        # xyz_sampled: (M, 4) float. premasked valid sample points
-        # ray_valid: (b, N) bool. mask of which samples are valid
-        # max_samps = N
-        # z_vals: (b, N) float. distance along ray to sample
-        # dists: (b, N) float. distance between samples
-        # whole_valid: mask into origin rays of which B rays where able to be fully sampled.
-        B = ray_valid.shape[0]
 
+        B = ray_valid.shape[0]
         xyz_normed = self.rf.normalize_coord(xyz_sampled)
         full_shape = (B, max_samps, 3)
         n_samples = [xyz_sampled.shape[0]]
-
         M = xyz_sampled.shape[0]
-
         device = xyz_sampled.device
 
+        # get view directions per point
         viewdirs = rays[whole_valid, 3:6].view(-1, 1, 3).expand(full_shape)
         # rays_up = rays[:, 6:9]
         # rays_up = rays_up.view(-1, 1, 3).expand(full_shape)
@@ -335,9 +326,7 @@ class TensorNeRF(torch.nn.Module):
                 n_samples += incoming_stats["n_samples"]
                 return incoming_light, 1 - incoming_data["acc_map"]
             else:
-                incoming_light = self.render_just_bg(
-                    rays[..., 3:6], start_mipval.reshape(-1)
-                )
+                incoming_light = self.render_just_bg(rays[..., 3:6], start_mipval.reshape(-1))
                 return incoming_light, None
 
         # def render_reflection(rays, start_mipval, retrace=False):
@@ -516,16 +505,10 @@ class TensorNeRF(torch.nn.Module):
                 # ], dim=1)
                 # d_normal_map = torch.matmul(row_basis, d_world_normal_map.unsqueeze(-1)).squeeze(-1)
 
-                world_normal_map = row_mask_sum(
-                    world_normal * pweight[..., None], ray_valid
-                )
-                world_normal_map = acc_map[..., None] * world_normal_map + (
-                    1 - acc_map[..., None]
-                )
+                world_normal_map = row_mask_sum(world_normal * pweight[..., None], ray_valid)
+                world_normal_map = acc_map[..., None] * world_normal_map + (1 - acc_map[..., None])
                 pred_norm_map = row_mask_sum(pred_norms * pweight[..., None], ray_valid)
-                pred_norm_map = acc_map[..., None] * pred_norm_map + (
-                    1 - acc_map[..., None]
-                )
+                pred_norm_map = acc_map[..., None] * pred_norm_map + (1 - acc_map[..., None])
 
                 if weight.shape[1] > 0:
                     inds = ((weight).max(dim=1).indices).clip(min=0)
@@ -560,26 +543,10 @@ class TensorNeRF(torch.nn.Module):
             images["world_normal"] = world_normal_map.detach().cpu()
             images["normal"] = pred_norm_map.detach().cpu()
             if max_weight_N > 0:
-                dweight = torch.cat(
-                    [
-                        weight,
-                        torch.zeros(
-                            (weight.shape[0], max_weight_N - weight.shape[1]),
-                            device=device,
-                        ),
-                    ],
-                    dim=1,
-                )
-                dz_vals = torch.cat(
-                    [
-                        z_vals,
-                        torch.zeros(
-                            (z_vals.shape[0], max_weight_N - z_vals.shape[1]),
-                            device=device,
-                        ),
-                    ],
-                    dim=1,
-                )
+                dweight = torch.cat([
+                    weight,torch.zeros((weight.shape[0], max_weight_N - weight.shape[1]), device=device)], dim=1)
+                dz_vals = torch.cat([
+                    z_vals, torch.zeros((z_vals.shape[0], max_weight_N - z_vals.shape[1]), device=device)], dim=1)
                 images["weights"] = dweight.detach()
                 images["z_vals"] = dz_vals.detach()
 
@@ -589,23 +556,19 @@ class TensorNeRF(torch.nn.Module):
                 im = row_mask_sum(v * eweight, ray_valid)
                 images[k] = im + (1 - acc_map[..., None]) * bg
         elif recur == 0:
+            depth_map = torch.sum(weight * z_vals, 1)
+            images["depth_map"] = depth_map
             aweight = weight[ray_valid]
-            NdotV1 = (
-                -viewdirs[ray_valid].reshape(-1, 3).detach() * pred_norms.reshape(-1, 3)
-            ).sum(dim=-1)
 
-            aweight = weight[ray_valid]
-            NdotV2 = (
-                -viewdirs[ray_valid].reshape(-1, 3).detach()
-                * world_normal.reshape(-1, 3)
-            ).sum(dim=-1)
+            """ Orientation Loss """
+            NdotV1 = (-viewdirs[ray_valid].reshape(-1, 3).detach() * pred_norms.reshape(-1, 3)).sum(dim=-1)
+            NdotV2 = (-viewdirs[ray_valid].reshape(-1, 3).detach() * world_normal.reshape(-1, 3)).sum(dim=-1)
             if self.geonorm_iters > 0:
-                ori_loss = (
-                    aweight * (NdotV1.clamp(max=0) ** 2 + NdotV2.clamp(max=0) ** 2)
-                ).sum()  # / B
+                ori_loss = (aweight * (NdotV1.clamp(max=0) ** 2 + NdotV2.clamp(max=0) ** 2)).sum()  # / B
             else:
                 ori_loss = (aweight * (NdotV2.clamp(max=0) ** 2)).sum()  # / B
 
+            """ distortion loss """
             # midpoint = torch.cat([
             #     z_vals,
             #     (2*z_vals[:, -1] - z_vals[:, -2])[:, None],
@@ -619,6 +582,7 @@ class TensorNeRF(torch.nn.Module):
             # distortion_loss = calc_distortion_loss(midpoint, full_weight, dt)
             distortion_loss = torch.tensor(0.0, device=device)
 
+            """ predicted normals loss """
             if self.align_pred_norms:
                 align_world_loss = 2 * (
                     1 - (pred_norms * world_normal).sum(dim=-1)
@@ -629,43 +593,36 @@ class TensorNeRF(torch.nn.Module):
 
             # output['diffuse_reg'] = (roughness-0.5).clip(min=0).mean() + tint.clip(min=1e-3).mean()
             # output['diffuse_reg'] = tint.clip(min=1e-3).mean()
+
+            """ envmap regularization """
             if self.bg_module is not None:
                 envmap_brightness = self.bg_module.mean_color().mean()
                 statistics["envmap_reg"] = (envmap_brightness - 0.05).clip(min=0)
             else:
                 statistics["envmap_reg"] = torch.tensor(0.0)
 
+            """ surface normals error """
             if gt_normals is not None:
-                gt_normals_mask = (
-                    gt_normals[whole_valid].view(-1, 1, 3).expand(full_shape)[ray_valid]
-                )
+                gt_normals_mask = (gt_normals[whole_valid].view(-1, 1, 3).expand(full_shape)[ray_valid])
                 gt_mask = gt_normals_mask.sum(dim=1) > 0.9
-                pred_norm_err_a = 2 * (
-                    1 - (pred_norms[gt_mask] * gt_normals_mask[gt_mask]).sum(dim=-1)
-                )
-                pred_norm_err_b = 2 * (
-                    1 - (world_normal[gt_mask] * gt_normals_mask[gt_mask]).sum(dim=-1)
-                )
-                pred_norm_err = (
-                    aweight[gt_mask] * (pred_norm_err_a + pred_norm_err_b)
-                ).sum()  # / B
+                pred_norm_err_a = 2 * (1 - (pred_norms[gt_mask] * gt_normals_mask[gt_mask]).sum(dim=-1))
+                pred_norm_err_b = 2 * (1 - (world_normal[gt_mask] * gt_normals_mask[gt_mask]).sum(dim=-1))
+                pred_norm_err = (aweight[gt_mask] * (pred_norm_err_a + pred_norm_err_b)).sum()  # / B
                 statistics["normal_err"] = pred_norm_err
+
+            """ brdf regularization """
             # statistics['brdf_reg'] = ((debug['tint'].mean()-1).clip(min=0)**2) if 'tint' in debug else torch.tensor(0.0)
             if "tint" in debug:
-                statistics["brdf_reg"] = (
-                    debug["tint"].mean().clip(min=0)
-                    if "tint" in debug
-                    else torch.tensor(0.0)
-                )
+                statistics["brdf_reg"] = (debug["tint"].mean().clip(min=0) if "tint" in debug else torch.tensor(0.0))
             else:
                 statistics["brdf_reg"] = torch.tensor(0.0)
+
+            """ diffuse color regularization """
             if "diffuse" in debug:
-                statistics["diffuse_reg"] = (
-                    aweight.detach().reshape(-1, 1) * debug["diffuse"]
-                ).sum() / 3
+                statistics["diffuse_reg"] = (aweight.detach().reshape(-1, 1) * debug["diffuse"]).sum() / 3
             else:
                 statistics["diffuse_reg"] = torch.tensor(0.0)
-            # debug['roughness'].sum() if 'roughness' in debug else torch.tensor(0.0)
+
             statistics["prediction_loss"] = prediction_loss
             statistics["ori_loss"] = ori_loss
             statistics["distortion_loss"] = distortion_loss
@@ -680,6 +637,7 @@ class TensorNeRF(torch.nn.Module):
         # ic(rgb[ray_valid].mean(dim=0), rgb_map[acc_map>0.1].mean(dim=0), weight.shape)
         if tonemap:
             rgb_map = self.tonemap(rgb_map, noclip=self.hdr)
+
         rgb_map = rgb_map + (1 - acc_map[..., None]) * bg
         # if white_bg:
         #     if True:
@@ -695,4 +653,5 @@ class TensorNeRF(torch.nn.Module):
 
         images["rgb_map"] = rgb_map
         images["acc_map"] = acc_map.detach()
+
         return images, statistics

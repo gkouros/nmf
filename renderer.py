@@ -373,27 +373,14 @@ def evaluate(
                 gt_normal = (gt_normal * 127 + 128).int()
                 gt_normal = (gt_normal - 128) / 127
 
-                gt_normal = (
-                    gt_normal
-                    / ((gt_normal**2).sum(dim=-1, keepdim=True) + 1e-6).sqrt()
-                )
-                pnorms = (
-                    pnorms / ((pnorms**2).sum(dim=-1, keepdim=True) + 1e-6).sqrt()
-                )
-                norm_err = (
-                    torch.arccos(
-                        (pnorms * gt_normal).sum(dim=-1).clip(min=1e-8, max=1 - 1e-8)
-                    )
-                    * 180
-                    / np.pi
-                )
+                gt_normal = (gt_normal / ((gt_normal**2).sum(dim=-1, keepdim=True) + 1e-6).sqrt())
+                pnorms = (pnorms / ((pnorms**2).sum(dim=-1, keepdim=True) + 1e-6).sqrt())
+                norm_err = (torch.arccos((pnorms * gt_normal).sum(dim=-1).clip(min=1e-8, max=1 - 1e-8)) * 180 / np.pi)
                 norm_err[torch.isnan(norm_err)] = 0
                 norm_err *= test_dataset.acc_maps[im_idx].squeeze(-1)
                 norm_errs.append(norm_err.sum() / test_dataset.acc_maps[im_idx].sum())
                 if savePath is not None:
-                    imageio.imwrite(
-                        f"{savePath}/normal_err/{prtx}{idx:03d}.exr", norm_err.numpy()
-                    )
+                    imageio.imwrite(f"{savePath}/normal_err/{prtx}{idx:03d}.exr", norm_err.numpy())
                     # imageio.imwrite(f'{savePath}/normal_err/{prtx}{idx:03d}.png', vis_gt_normal)
             except:
                 pass
