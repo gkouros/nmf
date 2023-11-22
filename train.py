@@ -362,7 +362,7 @@ def reconstruction(args):
     OmegaConf.save(config=args, f=f"{logfolder}/config.yaml")
 
     # initialize training params
-    num_rays = params.starting_batch_size
+    num_rays = max(params.starting_batch_size, patch_size ** 2)
     prev_n_samples = None
     hist_n_samples = None
 
@@ -451,37 +451,30 @@ def reconstruction(args):
                     if n_samples[0] == 0:
                         continue
                     prediction_loss = stats["prediction_loss"].sum()
+                    ori_loss = stats["ori_loss"].sum()
                     distortion_loss = stats["distortion_loss"].sum()
                     diffuse_reg = stats["diffuse_reg"].sum()
                     envmap_reg = stats["envmap_reg"].sum()
                     brdf_reg = stats["brdf_reg"].sum()
                     rgb_map = ims["rgb_map"]
                     depth_map_valid = ims["depth_map"]
+                    whole_valid = stats["whole_valid"]
                     if not train_dataset.hdr:
                         rgb_map = rgb_map.clip(max=1)
-                    whole_valid = stats["whole_valid"]
 
                     """ Photometric Loss """
                     if params.charbonier_loss:
                         loss = torch.sqrt((rgb_map - rgb_train[whole_valid]) ** 2 + params.charbonier_eps**2).sum()
                     else:
-                        # loss = ((rgb_map - rgb_train[whole_valid]) ** 2).mean()
                         if tensorf.hdr:
-                            loss = (
-                                F.huber_loss(rgb_map, rgb_train[whole_valid], delta=1, reduction="none")
-                                # .clip(min=torch.finfo(rgb_map.dtype).eps)
-                                # .sqrt()
-                                .sum()
-                            )
+                            loss = (F.huber_loss(rgb_map, rgb_train[whole_valid], delta=1, reduction="none").sum())
                         else:
                             loss = ((rgb_map.clip(0, 1) - rgb_train[whole_valid].clip(0, 1)) ** 2).sum()
-                        # loss = ((rgb_map.clip(0, 1) - rgb_train[whole_valid].clip(0, 1)).abs()).sum()
                     norm_err = (
                         sum(stats["normal_err"])
                         if type(stats["normal_err"]) == list
                         else stats["normal_err"].sum()
                     )
-                    # photo_loss = ((rgb_map.clip(0, 1) - rgb_train[whole_valid].clip(0, 1)) ** 2).mean().detach()
                     photo_loss = (((rgb_map.clip(0, 1) - rgb_train[whole_valid].clip(0, 1)) ** 2).mean().detach())
 
                     """ Depth smoothness loss """
@@ -491,14 +484,16 @@ def reconstruction(args):
                         depth_map = depth_map.reshape(-1, patch_size ** 2)  # (B/(P*P), P*P)
                         patch_mid_offset = patch_size ** 2 // 2  # offset to middle point of patch
                         delta_depth = (depth_map - depth_map[:, patch_mid_offset, None]).abs()  # patch depth differences from mid
-                        rgb_patches = rgb_train.reshape(-1, patch_size ** 2, rgb_train.shape[-1])  # (B/(P*P), P*P, 3)
-                        delta_rgb = rgb_patches - rgb_patches[:, None, patch_mid_offset]  # (B/(P*P), P*P, 3) color difference of patch from mid
-                        weights = torch.exp(-delta_rgb.mean(axis=-1).abs() / params.smoothness_gamma)  # patch color consistency weights
+
+                        if params.bilateral_smoothness:
+                            rgb_patches = rgb_train.reshape(-1, patch_size ** 2, rgb_train.shape[-1])  # (B/(P*P), P*P, 3)
+                            delta_rgb = rgb_patches - rgb_patches[:, None, patch_mid_offset]  # (B/(P*P), P*P, 3) color difference of patch from mid
+                            weights = torch.exp(-delta_rgb.mean(axis=-1).abs() / params.smoothness_gamma)  # patch color consistency weights
+                        else:
+                            weights = torch.ones_like(delta_depth)
                         smoothness_loss = (weights * delta_depth).sum()  # the smoothness loss
                     else:
                         smoothness_loss = torch.tensor(0.0, device=device)
-
-                    ori_loss = stats["ori_loss"].sum()
 
                     # adjust number of rays
                     # need to store mean ratios if I have any hope of stabilizing this
@@ -616,7 +611,6 @@ def reconstruction(args):
                     # summary_writer.add_scalar('train/distortion_loss', distortion_loss.detach().item(), global_step=iteration)
                     # summary_writer.add_scalar('train/prediction_loss', prediction_loss.detach().item(), global_step=iteration)
                     # summary_writer.add_scalar('train/diffuse_loss', diffuse_reg.detach().item(), global_step=iteration)
-                    #
                     # summary_writer.add_scalar('train/lr', list(optimizer.param_groups)[0]['lr'], global_step=iteration)
                 del ray_idx, rays_train, rgba_train, gt_normal_map, ims, stats
 
