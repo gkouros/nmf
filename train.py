@@ -36,12 +36,17 @@ renderer = chunk_renderer
 @torch.no_grad()
 def render_test(args):
     params = args.model.params
+    params = args.model.params
+    expname = f"{args.dataset.scenedir.split('/')[-1]}_{args.expname}"
+    ic(expname)
+
+    if args.ckpt is None:
+        args.ckpt = os.path.join(args.basedir, expname, expname + '.th')
+
     if not os.path.exists(args.ckpt):
         logger.info("the ckpt path does not exists!!")
         return
 
-    expname = f"{args.dataset.scenedir.split('/')[-1]}_{args.expname}"
-    ic(expname)
     white_bg = True
 
     # init dataset
