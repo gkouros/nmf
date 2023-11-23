@@ -774,12 +774,12 @@ def reconstruction(args):
             tensorf,
             c2ws,
             renderer,
-            f"{logfolder}/imgs_path_all/",
-            N_vis=-1,
+            args,
+            savePath=f"{logfolder}/imgs_path_all/",
+            device=device,
+            ndc_ray=ndc_ray,
             N_samples=-1,
             white_bg=white_bg,
-            ndc_ray=ndc_ray,
-            device=device,
             gt_bg=gt_bg,
         )
 
