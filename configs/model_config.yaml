@@ -95,7 +95,6 @@ schedule:
   bounce_n_list: [0, 0]
   bounce_iter_list: [0]
 
-
   upsamp_list: [3000,4000,5500,7000]
   #upsamp_list: [2000,3000,4000,5500,7000]
   #uplambda_list: [7000, 12000, 17000, 21000]

@@ -556,9 +556,19 @@ class TensorNeRF(torch.nn.Module):
                 im = row_mask_sum(v * eweight, ray_valid)
                 images[k] = im + (1 - acc_map[..., None]) * bg
         elif recur == 0:
+            aweight = weight[ray_valid]
+
+            """ Depth map """
             depth_map = torch.sum(weight * z_vals, 1)
             images["depth_map"] = depth_map
-            aweight = weight[ray_valid]
+
+            """ Normals maps """
+            world_normal_map = row_mask_sum(world_normal * pweight[..., None], ray_valid)
+            world_normal_map = acc_map[..., None] * world_normal_map + (1 - acc_map[..., None])
+            pred_norm_map = row_mask_sum(pred_norms * pweight[..., None], ray_valid)
+            pred_norm_map = acc_map[..., None] * pred_norm_map + (1 - acc_map[..., None])
+            images["world_normal_map"] = world_normal_map
+            images["pred_normal_map"] = pred_norm_map
 
             """ Orientation Loss """
             NdotV1 = (-viewdirs[ray_valid].reshape(-1, 3).detach() * pred_norms.reshape(-1, 3)).sum(dim=-1)
@@ -584,9 +594,7 @@ class TensorNeRF(torch.nn.Module):
 
             """ predicted normals loss """
             if self.align_pred_norms:
-                align_world_loss = 2 * (
-                    1 - (pred_norms * world_normal).sum(dim=-1)
-                )  # **0.5
+                align_world_loss = 2 * (1 - (pred_norms * world_normal).sum(dim=-1))  # **0.5
                 prediction_loss = (aweight * align_world_loss).sum()  # / B
             else:
                 prediction_loss = torch.tensor(0.0)

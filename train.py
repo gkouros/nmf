@@ -434,6 +434,8 @@ def reconstruction(args):
                         keys=[
                             "rgb_map",
                             "depth_map",
+                            "world_normal_map",
+                            "pred_normal_map",
                             "normal_err",
                             "distortion_loss",
                             "prediction_loss",
@@ -463,6 +465,8 @@ def reconstruction(args):
                     brdf_reg = stats["brdf_reg"].sum()
                     rgb_map = ims["rgb_map"]
                     depth_map_valid = ims["depth_map"]
+                    world_normal_map_valid = ims["world_normal_map"]
+                    pred_normal_map_valid = ims["pred_normal_map"]
                     whole_valid = stats["whole_valid"]
                     if not train_dataset.hdr:
                         rgb_map = rgb_map.clip(max=1)
@@ -484,19 +488,19 @@ def reconstruction(args):
 
                     """ Depth smoothness loss """
                     if patch_size > 1 and params.smoothness_gamma > 0:
-                        depth_map = torch.zeros_like(whole_valid, dtype=depth_map_valid.dtype)
-                        depth_map[whole_valid] = depth_map_valid
-                        depth_map = depth_map.reshape(-1, patch_size ** 2)  # (B/(P*P), P*P)
+                        num_channels = 3 if params.smooth_normals else 1
+                        patches = torch.zeros(whole_valid.shape + (num_channels,), dtype=depth_map_valid.dtype, device=device)
+                        patches[whole_valid] = depth_map_valid[None] if not params.smooth_normals else world_normal_map_valid
+                        patches = patches.reshape(-1, patch_size ** 2, num_channels)  # (B/(P*P), P*P, C)
                         patch_mid_offset = patch_size ** 2 // 2  # offset to middle point of patch
-                        delta_depth = (depth_map - depth_map[:, patch_mid_offset, None]).abs()  # patch depth differences from mid
-
+                        delta_patch = (patches - patches[:, None, patch_mid_offset]).abs().sum(axis=-1)  # patch depth differences from mid
                         if params.bilateral_smoothness:
                             rgb_patches = rgb_train.reshape(-1, patch_size ** 2, rgb_train.shape[-1])  # (B/(P*P), P*P, 3)
                             delta_rgb = rgb_patches - rgb_patches[:, None, patch_mid_offset]  # (B/(P*P), P*P, 3) color difference of patch from mid
-                            weights = torch.exp(-delta_rgb.mean(axis=-1).abs() / params.smoothness_gamma)  # patch color consistency weights
+                            weights = torch.exp(-delta_rgb.abs().sum(axis=-1) / params.smoothness_gamma)  # patch color consistency weights
                         else:
                             weights = torch.ones_like(delta_depth)
-                        smoothness_loss = (weights * delta_depth).sum()  # the smoothness loss
+                        smoothness_loss = (weights * delta_patch).sum()  # the smoothness loss
                     else:
                         smoothness_loss = torch.tensor(0.0, device=device)
 
