@@ -207,6 +207,7 @@ def evaluate(
     bundle_size=1,
     gt_bg=None,
 ):
+
     print("Eval")
     PSNRs, rgb_maps, depth_maps = [], [], []
     norm_errs = []
@@ -303,7 +304,6 @@ def evaluate(
             [0.0, 0.0, 1.0],
         ]
     )
-
     final_stats = {}
     if tensorf.bg_module is not None:
         bg_path = Path(savePath) / "envmaps"
@@ -320,10 +320,7 @@ def evaluate(
     ic(tensorf.eval_batch_size)
     for idx, im_idx, rays, gt_rgb in iterator():
         torch.cuda.empty_cache()
-        ims, stats = brender(
-            rays, tensorf, N_samples=N_samples, ndc_ray=ndc_ray, is_train=False
-        )
-
+        ims, stats = brender(rays, tensorf, N_samples=N_samples, ndc_ray=ndc_ray, is_train=False)
         # H, W, _ = normal.shape
         # normal = normal.reshape(-1, 3)# @ pose[:3, :3]
         # normal = normal.reshape(H, W, 3)
@@ -333,7 +330,6 @@ def evaluate(
         vis_world_normal = (ims.world_normal * 127 + 128).clamp(0, 255).byte()
         # vis_normal = (normal * 255).clamp(0, 255).byte()
 
-        err_map = (ims.rgb_map.clip(0, 1) - gt_rgb.clip(0, 1)) + 0.5
 
         vis_depth_map, _ = visualize_depth_numpy(ims.depth.numpy(), near_far)
 
@@ -404,8 +400,10 @@ def evaluate(
                 l_alex.append(l_a)
                 l_vgg.append(l_v)
 
+            err_map = (ims.rgb_map.clip(0, 1) - gt_rgb.clip(0, 1)) + 0.5
+            err_map = (err_map.clamp(0, 1).numpy() * 255).astype("uint8")
+
         rgb_map = (ims.rgb_map.clamp(0, 1).numpy() * 255).astype("uint8")
-        err_map = (err_map.clamp(0, 1).numpy() * 255).astype("uint8")
         # rgb_map = np.concatenate((rgb_map, depth_map), axis=1)
         rgb_maps.append(rgb_map)
         depth_maps.append(vis_depth_map)
@@ -444,7 +442,9 @@ def evaluate(
                 imageio.imwrite(f"{savePath}/diffuse/{prtx}{idx:03d}.png", diffuse)
 
             imageio.imwrite(f"{savePath}/world_normal/{prtx}{idx:03d}.png", vis_world_normal)
-            imageio.imwrite(f"{savePath}/err/{prtx}{idx:03d}.png", err_map)
+            if gt_rgb is not None:
+                imageio.imwrite(f"{savePath}/err/{prtx}{idx:03d}.png", err_map)
+
             surf_width = ims.surf_width.reshape(ims.surf_width.shape[:2]).numpy().astype(np.uint8)
             imageio.imwrite(f"{savePath}/surf_width/{prtx}{idx:03d}.png", surf_width)
             cross_section = (ims.cross_section.clamp(0, 1).numpy() * 255).astype("uint8")
@@ -525,7 +525,7 @@ def evaluation(
 
 @torch.no_grad()
 def evaluation_path(
-    test_dataset, tensorf, c2ws, renderer, *args, device="cuda", ndc_ray=False, **kwargs
+    test_dataset, tensorf, unused, renderer, c2ws, *args, device="cuda", ndc_ray=False, **kwargs
 ):
     W, H = test_dataset.img_wh
 
@@ -538,8 +538,8 @@ def evaluation_path(
                     H, W, test_dataset.focal[0], 1.0, rays_o, rays_d
                 )
             rays = torch.cat([rays_o, rays_d], 1)  # (h*w, 6)
-            yield idx, idx, rays, None
+            yield idx, idx, rays.to(device), None
 
     return evaluate(
-        iterator, test_dataset, tensorf, renderer, *args, ndc_ray=ndc_ray, **kwargs
+        iterator, test_dataset, tensorf, renderer, *args, device=device, ndc_ray=ndc_ray, **kwargs
     )
