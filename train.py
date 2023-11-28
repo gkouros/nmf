@@ -36,7 +36,6 @@ renderer = chunk_renderer
 @torch.no_grad()
 def render_test(args):
     params = args.model.params
-    params = args.model.params
     expname = f"{args.dataset.scenedir.split('/')[-1]}_{args.expname}"
     ic(expname)
 
@@ -70,7 +69,8 @@ def render_test(args):
     tensorf = tensorf.to(device)
     tensorf.train()
     tensorf.sampler.update(tensorf.rf, init=True)
-    tensorf.sampler.updateAlphaMask(tensorf.rf, grid_size=[266] * 3)
+    grid_size = ckpt['state_dict']['sampler.alphaMask.alpha_volume'].shape[2:]
+    tensorf.sampler.updateAlphaMask(tensorf.rf, grid_size=grid_size)
     tensorf.load_state_dict(ckpt["state_dict"], strict=False)
     ic(tensorf.sampler.near_far)
     # for i in range(1000):
@@ -121,9 +121,10 @@ def render_test(args):
 
     logfolder = os.path.dirname(args.ckpt)
 
-    """ Render train path """
+    """ Render train views """
     if args.render_train:
-        os.makedirs(f"{logfolder}/imgs_train_all", exist_ok=True)
+        folder = f"{logfolder}/imgs_train_all"
+        os.makedirs(folder, exist_ok=True)
         train_dataset = dataset(
             os.path.join(args.datadir, args.dataset.scenedir),
             split="train",
@@ -132,12 +133,13 @@ def render_test(args):
             white_bg=white_bg,
             is_testing=True,
         )
+        logger.info(f"Saving train views to {folder}")
         test_res = evaluation(
             train_dataset,
             tensorf,
             args,
             renderer,
-            f"{logfolder}/imgs_train_all/",
+            folder,
             N_vis=-1,
             N_samples=-1,
             white_bg=white_bg,
@@ -152,7 +154,7 @@ def render_test(args):
     if args.render_test:
         folder = f"{logfolder}/imgs_test_all"
         os.makedirs(folder, exist_ok=True)
-        logger.info(f"Saving test to {folder}")
+        logger.info(f"Saving test views to {folder}")
         evaluation(
             test_dataset,
             tensorf,
@@ -170,23 +172,23 @@ def render_test(args):
     torch.cuda.empty_cache()
     if args.render_path:
         c2ws = test_dataset.render_path
-        # c2ws = test_dataset.poses
+        folder = f"{logfolder}/imgs_path_all"
+        logger.info(f"Saving path views to {folder}")
         logger.info("========>", c2ws.shape)
-        os.makedirs(f"{logfolder}/imgs_path_all", exist_ok=True)
+        os.makedirs(folder, exist_ok=True)
         evaluation_path(
             test_dataset,
             tensorf,
-            c2ws,
+            args,
             renderer,
-            f"{logfolder}/imgs_path_all/",
-            N_vis=-1,
+            c2ws,
+            savePath=folder,
             N_samples=-1,
             white_bg=white_bg,
             ndc_ray=ndc_ray,
-            device=device,
-            gt_bg=gt_bg,
-            bundle_size=args.bundle_size
+            device=device
         )
+
 
 def reconstruction(args):
     params = args.model.params
@@ -775,24 +777,26 @@ def reconstruction(args):
             f'======> {expname} test all psnr: {np.mean(test_res["psnrs"])} <========================'
         )
 
-    """ Render test path """
+    """ Render path views """
     torch.cuda.empty_cache()
     if args.render_path:
-        c2ws = test_dataset.render_path
         # c2ws = test_dataset.poses
+        folder = f"{logfolder}/imgs_path_all"
+        logger.info(f"Saving path views to {folder}")
+        c2ws = test_dataset.render_path
         logger.info("========>", c2ws.shape)
-        os.makedirs(f"{logfolder}/imgs_path_all", exist_ok=True)
+        os.makedirs(folder, exist_ok=True)
         evaluation_path(
             test_dataset,
             tensorf,
-            c2ws,
-            renderer,
             args,
-            savePath=f"{logfolder}/imgs_path_all/",
-            device=device,
-            ndc_ray=ndc_ray,
+            renderer,
+            c2ws,
+            savePath=folder,
             N_samples=-1,
             white_bg=white_bg,
+            ndc_ray=ndc_ray,
+            device=device,
             gt_bg=gt_bg,
         )
 
