@@ -484,7 +484,16 @@ def reconstruction(args):
                         if type(stats["normal_err"]) == list
                         else stats["normal_err"].sum()
                     )
+
+                    if params.handle_foreshortening:
+                        viewdirs = rays_train[whole_valid, 3:6].view(-1, 3)
+                        fsh_weights = (world_normal_map_valid * viewdirs).sum(axis=-1, keepdims=True)
+                    else:
+                        fsh_weights = torch.ones(rgb_map.shape[0], 1)
+
+                    # photo_loss = (fsh_weights * ((rgb_map.clip(0, 1) - rgb_train[whole_valid].clip(0, 1)) ** 2).mean().detach())
                     photo_loss = (((rgb_map.clip(0, 1) - rgb_train[whole_valid].clip(0, 1)) ** 2).mean().detach())
+                    # import pdb; pdb.set_trace()
 
                     """ Depth smoothness loss """
                     if patch_size > 1 and params.smoothness_gamma > 0:

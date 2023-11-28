@@ -224,6 +224,7 @@ params:
   smoothness_gamma: 0.1
   bilateral_smoothness: True
   smooth_normals: False
+  handle_foreshortening: False
 
   n_iters: 30000
   charbonier_loss: false
